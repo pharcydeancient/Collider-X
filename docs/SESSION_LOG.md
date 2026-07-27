@@ -62,3 +62,49 @@ target) but is known to render blank on `expo start --web` in this repo — the
 aurora/wordmark/orb are native-correct. Live web preview was blocked here
 (Expo's version-check call is refused by the agent proxy), so verification was
 by `tsc --noEmit` (clean) + close reading against the reference, not a render.
+
+---
+
+## Session 3 — cards open in place, canvas placement, notebooks (2026-07-25)
+
+1. **Provider audit, done by calling the keys** rather than trusting the roster.
+   Both Groq keys are `401`; OpenRouter is out of credit; Google is capped at 20
+   req/day/model; NVIDIA NIM works. Recorded in `docs/VALIDATION_MINIMAX.md` and
+   `TASKS.md`.
+2. **Gemini's replacement as fallback #3**: `deepseek-ai/deepseek-v4-flash` on the
+   existing NVIDIA key, chosen by round-tripping candidates (several models NVIDIA
+   lists 404 on completion). Gemini stays as the last step, which is what still
+   catches the call on web where NVIDIA has no CORS.
+3. **Cards are summaries that open in place.** Tap expands a card to full size
+   where it sits (multiple at once, so two can be compared); the editor is now an
+   explicit "Edit" affordance on the open card rather than what a tap costs you.
+4. **Canvas view — free placement, and it is the default.** A card goes exactly
+   where it is dropped and stays there. Nothing snaps: `Align` (grid icon) is the
+   only thing that tidies, and picking a sort is the only thing that re-orders.
+   Unplaced cards flow into the shortest column using measured heights, so opening
+   one re-packs the cards below it without moving any card placed by hand.
+   Drag-to-embed is deliberately not wired on the canvas — "on top of" must not
+   silently mean "inside" on a surface whose point is putting cards next to each
+   other. It still works in the lane views.
+5. **Type identity got potency without losing the pale paper**: per-type tinted
+   paper, a deep same-hue ink for the glyph and header, and an always-present type
+   mark in the corner that the done-checkbox can no longer displace.
+6. **Notebook template.** A card can wear either face: `card` (a stack of fields)
+   or `notebook` (a header, ruled rows of plain strings, paged 7 at a time, with
+   its own embedded search bar). `rows` and `search` are ordinary layout fields —
+   placeable, movable, removable on any card, from the same list as every other
+   field.
+7. **Memories are the model's journal, not the user's list.** Both capture paths
+   (the LLM extractor and the regex pass) now file a memory as a ROW under a
+   subject header, creating a notebook card only when no existing header covers
+   the subject. Twenty things learned is one card of twenty rows. The board-chat
+   protocol gained `addRows`, and the Smart Gen system prompt says plainly that
+   memories are for the model and reminders are for the user.
+8. **The board inherits the app's background.** It was painting `#07080b` over the
+   wallpaper/aurora; it is transparent now, with a toggle to cover the background
+   for anyone who wants a plain field.
+9. Verified by driving the real app in a browser (`expo start --web` + Playwright):
+   canvas placement, drag, expand-in-place, notebook paging/search, the editor's
+   new Face/Entries sections, Align, and the background toggle were all
+   screenshotted working. `tsc --noEmit` clean of new errors (4 pre-existing, all
+   in files this session didn't touch).
