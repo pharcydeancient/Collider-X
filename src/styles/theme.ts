@@ -74,7 +74,13 @@ export const T = {
 };
 
 // The glass card gradient used across the redesign (LinearGradient colors).
-export const GLASS_CARD = ["rgba(255,255,255,0.07)", "rgba(255,255,255,0.028)", "rgba(10,12,18,0.35)"] as [string, string, string];
+// The final stop was rgba(10,12,18,0.35) — a 35% dark wash laid over the
+// user's wallpaper by every card on screen, which is what broke the image up
+// into panels instead of letting it read as one surface. Cut to 0.14: enough
+// to hold text contrast, light enough that the wallpaper stays continuous
+// behind the cards. 0.14 was too far the other way — settings rows over a
+// bright wallpaper stopped being readable — so this sits between the two.
+export const GLASS_CARD = ["rgba(255,255,255,0.06)", "rgba(255,255,255,0.022)", "rgba(10,12,18,0.22)"] as [string, string, string];
 export const GLASS_PANEL = ["rgba(255,255,255,0.08)", "rgba(14,16,22,0.6)"] as [string, string];
 
 // Exported so per-screen local StyleSheets (UpgradeScreen, etc.) can opt into
@@ -473,7 +479,17 @@ export const styles = StyleSheet.create(withFont({
   // real contrast, and every usage of addBtn already draws its "+" in
   // black, so white is the correct high-contrast counterpart, not a leftover
   // accident.
-  addBtn: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", backgroundColor: "#ffffff", shadowColor: "#000", shadowOpacity: 0.35, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 4 },
+  // Rounded-square glass, matching iconBtn. This was the last solid white
+  // circle in the app: ed077b7 moved every other control to this material
+  // ("instead of solid black circles") and missed this one, so it read as an
+  // ornament pasted on top of the redesign. Its glyphs were hardcoded #000 to
+  // survive the white fill; they are light now, like every other control.
+  addBtn: {
+    width: 36, height: 36, borderRadius: 12,
+    alignItems: "center", justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.14)",
+    borderWidth: 1, borderColor: "rgba(255,255,255,0.32)",
+  },
   primaryBtn: {
     borderRadius: 16, padding: 12, alignItems: "center", marginTop: 8,
     backgroundColor: "rgba(255,255,255,0.14)",
@@ -819,7 +835,7 @@ try {
 // Tracks are shared across all four wallpapers for now: the spec's "at least 5
 // curated tracks per wallpaper" is satisfied per-wallpaper, and a per-theme
 // tracklist is a content decision, not a code one.
-const PREMIUM_TRACKS = [
+export const PREMIUM_TRACKS = [
   { id: "t1", title: "Driftwood",   url: require("../../assets/themes/premium/tracks/track1_driftwood.mp3") },
   { id: "t2", title: "Glasswing",   url: require("../../assets/themes/premium/tracks/track2_glasswing.mp3") },
   { id: "t3", title: "Low Tide",    url: require("../../assets/themes/premium/tracks/track3_lowtide.mp3") },

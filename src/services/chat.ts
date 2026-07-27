@@ -22,6 +22,11 @@ import { callMiniMax } from "./minimax";
 // callers display the result, never error.message directly.
 export function friendlyErrorMessage(error: unknown): string {
   const msg = error instanceof Error ? error.message : String(error);
+  // providerError() below already produced a sentence meant for the user, and
+  // it says more than anything inferable from a status code (which credit ran
+  // out, which key was refused). Pattern-matching it a second time would flatten
+  // it back to the generic line, so it passes through untouched.
+  if (error instanceof Error && (error as any).userFacing) return msg;
   if (/\b429\b/.test(msg)) return "This model is getting a lot of requests right now — try again in a moment.";
   if (/\b401\b|\b403\b/.test(msg)) return "This model couldn't be reached with your current access — try again or switch models.";
   if (/timeout|network|fetch/i.test(msg)) return "Couldn't reach this model — check your connection and try again.";
@@ -444,6 +449,28 @@ export async function readSSEStream(res: Response, onToken?: (partial: string) =
   return full;
 }
 
+// Provider failures are shown to the user verbatim, so they have to read as
+// sentences rather than as a pasted HTTP body. Only the states a person can
+// actually do something about get their own wording; everything else keeps
+// the status code and a trimmed detail so a real bug stays diagnosable.
+async function providerError(label: string, res: Response): Promise<Error> {
+  const body = await res.text().catch(() => "");
+  let detail = "";
+  try { detail = JSON.parse(body)?.error?.message || ""; } catch { /* body wasn't JSON */ }
+
+  // `userFacing` tells friendlyErrorMessage this text is already final. Unset
+  // on the last line: an unrecognised status is a bug, not a user's problem,
+  // so it keeps the raw detail and gets the generic copy at display time.
+  const speak = (m: string) => Object.assign(new Error(m), { userFacing: true });
+
+  if (res.status === 401 || res.status === 403) return speak(`${label} rejected the API key.`);
+  if (res.status === 402) return speak(`${label} is out of credit. Top up to use this model.`);
+  if (res.status === 429) return speak(`${label} is rate limited right now. Try again in a moment.`);
+  if (res.status === 404) return speak(`${label} no longer offers this model.`);
+  if (res.status >= 500) return speak(`${label} is having trouble right now. Try again shortly.`);
+  return new Error(`${label} ${res.status}${detail ? `: ${detail.slice(0, 160)}` : ""}`);
+}
+
 export async function callGroq(model: string, messages: any[], onToken?: (partial: string) => void) {
   let lastErr: any = null;
   for (const key of GROQ_KEYS) {
@@ -454,7 +481,7 @@ export async function callGroq(model: string, messages: any[], onToken?: (partia
         body: JSON.stringify({ model, messages, temperature: 0.7, max_tokens: 1024, stream: !!onToken }),
       });
       if (res.status === 401 || res.status === 429) { lastErr = new Error(`Groq ${res.status}`); continue; }
-      if (!res.ok) throw new Error(`Groq ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      if (!res.ok) throw await providerError("Groq", res);
       if (!onToken) {
         const json = await res.json();
         return json.choices?.[0]?.message?.content ?? "";
@@ -481,7 +508,7 @@ export async function callOpenRouter(model: string, messages: any[], onToken?: (
     },
     body: JSON.stringify({ model, messages, temperature: opts?.temperature ?? 0.7, max_tokens: opts?.maxTokens ?? 1024, stream: !!onToken }),
   });
-  if (!res.ok) throw new Error(`OpenRouter ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  if (!res.ok) throw await providerError("OpenRouter", res);
   if (!onToken) {
     const json = await res.json();
     return json.choices?.[0]?.message?.content ?? "";
@@ -535,7 +562,7 @@ async function callGoogle(model: string, messages: any[], onToken?: (partial: st
       }),
     }
   );
-  if (!res.ok) throw new Error(`Google ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  if (!res.ok) throw await providerError("Google", res);
   const json = await res.json();
   const text = (json.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || "").join("").trim();
   // Non-streaming: report the whole answer once so callers that expect
@@ -565,7 +592,7 @@ async function callOpenRouterImage(model: string, prompt: string): Promise<strin
       modalities: ["image", "text"],
     }),
   });
-  if (!res.ok) throw new Error(`OpenRouter image ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  if (!res.ok) throw await providerError("Image generation", res);
   const json = await res.json();
   const msg = json.choices?.[0]?.message;
   const imageUrl = msg?.images?.[0]?.image_url?.url;
@@ -629,7 +656,7 @@ async function callOpenRouterVideo(model: string, prompt: string): Promise<strin
       aspect_ratio
     }),
   });
-  if (!createRes.ok) throw new Error(`OpenRouter video ${createRes.status}: ${(await createRes.text()).slice(0, 200)}`);
+  if (!createRes.ok) throw await providerError("Video generation", createRes);
   const job = await createRes.json();
   const pollUrl: string = job.polling_url || `https://openrouter.ai/api/v1/videos/${job.id}`;
 
@@ -639,7 +666,7 @@ async function callOpenRouterVideo(model: string, prompt: string): Promise<strin
   while (status === "pending" && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 8000));
     const pollRes = await fetch(pollUrl, { headers: { Authorization: `Bearer ${OPENROUTER_KEY}` } });
-    if (!pollRes.ok) throw new Error(`OpenRouter video poll ${pollRes.status}: ${(await pollRes.text()).slice(0, 200)}`);
+    if (!pollRes.ok) throw await providerError("Video generation", pollRes);
     const polled = await pollRes.json();
     status = polled.status;
     contentUrl = polled.unsigned_urls?.[0];
@@ -687,7 +714,7 @@ async function callOpenRouterSpeech(model: string, input: string, voice?: string
       response_format: format,
     }),
   });
-  if (!res.ok) throw new Error(`OpenRouter speech ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  if (!res.ok) throw await providerError("Speech generation", res);
   const blob = await res.blob();
   const b64: string = await new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -736,7 +763,7 @@ async function callOpenRouterAudio(model: string, prompt: string): Promise<strin
       stream: true,
     }),
   });
-  if (!res.ok) throw new Error(`OpenRouter music ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  if (!res.ok) throw await providerError("Music generation", res);
   const body = await res.text();
   let audioB64 = "";
   for (const line of body.split("\n")) {
@@ -865,7 +892,7 @@ export async function transcribeAudio(audioUri: string, mime = "audio/m4a"): Pro
         body: form as any,
       });
       if (res.status === 401 || res.status === 429) { lastErr = new Error(`STT ${res.status}`); continue; }
-      if (!res.ok) throw new Error(`STT ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      if (!res.ok) throw await providerError("Transcription", res);
       const json = await res.json();
       return json.text || "";
     } catch (e) { lastErr = e; }

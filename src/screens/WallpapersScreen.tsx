@@ -5,7 +5,8 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  ImageBackground
+  ImageBackground,
+  useWindowDimensions
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
@@ -121,28 +122,80 @@ export function WallpapersScreen({ goBack }: { goBack: () => void }) {
 
   const isSelected = (id: string) => state.wallpaper === id;
 
+  // A wallpaper is a portrait surface, so a preview of one has to be portrait
+  // too. These tiles were width:"47%" with a fixed height:110 — a landscape
+  // crop of a phone-shaped image, and two-per-row regardless of how much room
+  // there was. Column count now follows the actual width and the tile keeps a
+  // phone's proportions, so what you see is what lands behind the app.
+  // Measured rather than derived: Page and the ScrollView each add their own
+  // inset, so any arithmetic from window width is a guess that silently costs a
+  // column. onLayout reports the real content box and survives rotation.
+  const { width: winW } = useWindowDimensions();
+  const GUTTER = 12;
+  const [gridW, setGridW] = useState(0);
+  const effW = gridW || winW - 52;
+  const cols = Math.max(2, Math.min(6, Math.floor(effW / 180)));
+  // −2 absorbs the 1.5px selection border on the active tile, which otherwise
+  // pushes the last column past the edge and collapses the row.
+  const tileW = Math.floor((effW - GUTTER * (cols - 1)) / cols) - 2;
+
+  // One browsable surface instead of three lists you scroll past each other.
+  const [filter, setFilter] = useState<"all" | "gradients" | "photos" | "live">("all");
+  const FILTERS: { id: typeof filter; label: string; count: number }[] = [
+    { id: "all", label: "All", count: WALLPAPERS.length + FREE_THEMES.length + PREMIUM_THEMES.length },
+    { id: "gradients", label: "Gradients", count: WALLPAPERS.length },
+    { id: "photos", label: "Photos", count: FREE_THEMES.length },
+    { id: "live", label: "Live", count: PREMIUM_THEMES.length },
+  ];
+  const show = (s: typeof filter) => filter === "all" || filter === s;
+
   return (
     <Page title="Theme Wallpapers" goBack={goBack}>
       <ScrollView contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
 
+        <View onLayout={(e) => setGridW(e.nativeEvent.layout.width)} style={{ height: 0 }} />
+
+        <View style={{ flexDirection: "row", gap: 6, paddingTop: 4, paddingBottom: 10 }}>
+          {FILTERS.map((f) => {
+            const on = filter === f.id;
+            return (
+              <Pressable
+                key={f.id}
+                onPress={() => { Haptics.selectionAsync().catch(() => {}); setFilter(f.id); }}
+                style={{
+                  paddingVertical: 6, paddingHorizontal: 12, borderRadius: 999,
+                  borderWidth: 1,
+                  borderColor: on ? SELECTED_BORDER : "rgba(255,255,255,0.10)",
+                  backgroundColor: on ? "rgba(226,232,240,0.10)" : "transparent",
+                }}
+              >
+                <Text style={withFont({ fontSize: 11, fontWeight: "700", color: on ? "#fff" : "rgba(238,241,246,0.55)" })}>
+                  {f.label} {f.count}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
         {/* ── Preset colorscapes ── */}
+        {show("gradients") && (<>
         <View style={wallStyles.sectionHead}>
           <Text style={wallStyles.sectionLabel}>PRESET COLORSCAPES</Text>
           <Text style={wallStyles.sectionHint}>{WALLPAPERS.length} preset gradients</Text>
         </View>
-        <View style={styles.grid}>
+        <View style={[styles.grid, { gap: GUTTER }]}>
           {WALLPAPERS.map((wall) => {
             const active = isSelected(wall.id);
             return (
               <Pressable
                 key={wall.id}
                 onPress={() => handleSelectWallpaper(wall.id, wall.premium && !canUsePremium)}
-                style={{ width: "47%", marginBottom: 12 }}
+                style={{ width: tileW, marginBottom: 4 }}
               >
                 <Glass
                   style={[
                     styles.wallTile,
-                    { padding: 0, overflow: "hidden", height: 110, borderRadius: 16 },
+                    { padding: 0, overflow: "hidden", borderRadius: 16 },
                     active && { borderColor: SELECTED_BORDER, borderWidth: 1.5, shadowColor: SELECTED_BORDER, shadowOpacity: 0.2, shadowRadius: 10, elevation: 5 },
                   ]}
                 >
@@ -154,7 +207,13 @@ export function WallpapersScreen({ goBack }: { goBack: () => void }) {
                     {active ? (
                       <Ionicons name="checkmark-circle" size={14} color="#e2e8f0" />
                     ) : wall.premium && !canUsePremium ? (
-                      <Ionicons name="lock-closed" size={12} color={LOCK_COLOR} />
+                      // A bare padlock states that something is withheld without
+                      // saying what would release it. Naming the tier is the
+                      // whole of the answer and costs one word.
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
+                        <Ionicons name="lock-closed" size={10} color={LOCK_COLOR} />
+                        <Text style={withFont({ fontSize: 9, fontWeight: "800", color: LOCK_COLOR })}>PRO</Text>
+                      </View>
                     ) : null}
                   </View>
                 </Glass>
@@ -162,29 +221,31 @@ export function WallpapersScreen({ goBack }: { goBack: () => void }) {
             );
           })}
         </View>
+        </>)}
 
         {/* ── Free image themes (drop-in) ── */}
+        {show("photos") && (<>
         <View style={wallStyles.sectionHead}>
           <Text style={wallStyles.sectionLabel}>FREE STATIC IMAGES</Text>
           <Text style={wallStyles.sectionHint}>{FREE_THEMES.length} loaded</Text>
         </View>
-        
+
         {FREE_THEMES.length === 0 ? (
           <Text style={localStyles.mutedHint}>Drop custom .jpg assets in your project root to show themes here.</Text>
         ) : (
-          <View style={styles.grid}>
+          <View style={[styles.grid, { gap: GUTTER }]}>
             {FREE_THEMES.map((theme) => {
               const active = isSelected(theme.id);
               return (
                 <Pressable
                   key={theme.id}
                   onPress={() => handleSelectWallpaper(theme.id, false)}
-                  style={{ width: "47%", marginBottom: 12 }}
+                  style={{ width: tileW, marginBottom: 4 }}
                 >
                   <Glass
                     style={[
                       styles.wallTile,
-                      { padding: 0, overflow: "hidden", height: 110, borderRadius: 16 },
+                      { padding: 0, overflow: "hidden", borderRadius: 16 },
                       active && { borderColor: SELECTED_BORDER, borderWidth: 1.5 },
                     ]}
                   >
@@ -201,8 +262,10 @@ export function WallpapersScreen({ goBack }: { goBack: () => void }) {
             })}
           </View>
         )}
+        </>)}
 
         {/* ── Premium live wallpapers (individual purchase, per spec) ── */}
+        {show("live") && (<>
         <View style={wallStyles.sectionHead}>
           <Text style={wallStyles.sectionLabel}>PREMIUM LIVE WALLPAPERS</Text>
           <Text style={[wallStyles.sectionHint, { color: LOCK_COLOR }]}>{PREMIUM_THEMES.length} available · own individually</Text>
@@ -227,8 +290,16 @@ export function WallpapersScreen({ goBack }: { goBack: () => void }) {
                         !owned && { opacity: 0.6 },
                       ]}
                     >
+                      {/* The video only plays once owned and applied, so for
+                          everyone deciding whether to buy it, the poster IS the
+                          product shot. Without it the tile is a black rectangle
+                          with a price on it. The stills already ship alongside
+                          each .mp4; they were simply never wired up. */}
                       <Video
                         source={theme.source}
+                        posterSource={theme.poster}
+                        usePoster={!(active && owned)}
+                        posterStyle={{ resizeMode: "cover", width: "100%", height: "100%" } as any}
                         rate={1.0}
                         volume={0.0}
                         isMuted
@@ -265,7 +336,7 @@ export function WallpapersScreen({ goBack }: { goBack: () => void }) {
                       onPress={() => handlePurchase(theme.id, theme.price)}
                       style={wallStyles.buyBtn}
                     >
-                      <Ionicons name="cart-outline" size={13} color="#0a0512" />
+                      <Ionicons name="cart-outline" size={13} color="#eef1f6" />
                       <Text style={wallStyles.buyBtnText}>Own for {theme.price || "—"}</Text>
                     </Pressable>
                   ) : !!theme.tracks?.length && (
@@ -339,6 +410,7 @@ export function WallpapersScreen({ goBack }: { goBack: () => void }) {
             })}
           </View>
         )}
+        </>)}
       </ScrollView>
     </Page>
   );
@@ -397,13 +469,15 @@ const wallStyles = StyleSheet.create(withFont({
     alignItems: "center",
     justifyContent: "center",
     gap: 6,
-    backgroundColor: "#e2e8f0",
+    backgroundColor: "rgba(255,255,255,0.14)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.32)",
     borderRadius: 10,
     paddingVertical: 8,
     marginTop: 6,
   },
   buyBtnText: {
-    color: "#0a0512",
+    color: "#eef1f6",
     fontSize: 11.5,
     fontWeight: "800", fontFamily: fontFamilyForWeight(800),
   },

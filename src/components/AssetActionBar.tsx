@@ -4,6 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { BlurView } from "expo-blur";
 import { useCollider, type SavedAsset } from "../state";
+import { useToast } from "./Toast";
 import { T, fontFamilyForWeight, FONT_MONO } from "../styles/theme";
 
 /**
@@ -44,7 +45,8 @@ export type AssetActionBarProps = {
 export default function AssetActionBar({
   asset, onView, onUseAsContext, onUseAsSource, onDelete, hide = [], compact = false,
 }: AssetActionBarProps) {
-  const { state, dispatch, toast } = useCollider();
+  const { state, dispatch } = useCollider();
+  const { toast } = useToast();
   const [saveOpen, setSaveOpen] = useState(false);
   const [newName, setNewName] = useState("");
 
