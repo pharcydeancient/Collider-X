@@ -96,6 +96,7 @@ Stage 8  Verification        ░░░░░░░░░░░░░░░░░
 
 ## Blocked on you (not code)
 
+0. **OpenRouter is out of credit** (checked live, see `docs/VALIDATION_MINIMAX.md`): `$10.26` spent of `$10.00`, which kills every `provider: "openrouter"` route — most of the roster, including all image/video/music generation. Groq was replaced 2026-07-26 with a working key and is healthy again. NVIDIA NIM is uncapped; Google works at 20 requests/day/model. **Topping up OpenRouter is a you-thing, not a code-thing.**
 1. **Premium wallpaper assets.** `assets/themes/premium/` is empty. The store sells `premium_mock_aurora` — BigBuckBunny plus five SoundHelix test tracks. Billing is now correct; the inventory is samples. Ship-blocking regardless of code.
 2. **Receipt verification endpoint.** Stage 0's open item — needs a server.
 3. **Font ratification.** Spec says Manrope + Playfair; app ships Instrument Sans + IBM Plex Mono. Either amend the spec or add Playfair for headers.

@@ -31,7 +31,9 @@ export function MemoryScreen({ goBack }: { goBack: () => void }) {
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  const { q, setQ, filtered } = useSearch(typed_memories, (m) => `${m.content} ${m.modelId}`);
+  // Search reaches the entries too — a notebook whose header doesn't mention
+  // the thing you're looking for still holds the row that does.
+  const { q, setQ, filtered } = useSearch(typed_memories, (m) => `${m.content} ${(m.rows || []).join(" ")} ${m.modelId}`);
 
   const toggleSelected = (id: string) => {
     setSelectedIds((prev) => {
@@ -161,7 +163,24 @@ export function MemoryScreen({ goBack }: { goBack: () => void }) {
                       <Text style={[styles.bodyText, { fontSize: 13, lineHeight: 18, color: "#fff" }]} numberOfLines={4}>
                         {m.content}
                       </Text>
-                      
+                      {/* A memory is a notebook: its content line is the
+                          header and the entries live in rows. Showing the
+                          first entries here keeps this list honest about what
+                          is actually stored — the board is where the whole
+                          notebook is paged and searched. */}
+                      {!!m.rows?.length && (
+                        <View style={{ gap: 3, marginTop: 6 }}>
+                          {m.rows.slice(0, 3).map((r, i) => (
+                            <Text key={i} style={[styles.muted, { fontSize: 11.5, lineHeight: 16 }]} numberOfLines={2}>
+                              · {r}
+                            </Text>
+                          ))}
+                          {m.rows.length > 3 && (
+                            <Text style={[styles.muted, { fontSize: 10.5 }]}>+{m.rows.length - 3} more entries</Text>
+                          )}
+                        </View>
+                      )}
+
                       <View style={localStyles.cardFooter}>
                         <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                           <View style={[localStyles.modelBadge, { backgroundColor: `${accentColor}18`, borderColor: `${accentColor}35` }]}>

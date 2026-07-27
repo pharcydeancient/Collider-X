@@ -8,7 +8,7 @@
 // Slug verified live against the key's /v1/models listing (minimaxai/minimax-m3
 // exists; a completion round-trips) — not guessed.
 import type { ChatMessage } from "../state";
-import { callGoogleModel, callOpenRouter, readSSEStream, webSearch } from "./chat";
+import { callOpenRouter, readSSEStream, webSearch } from "./chat";
 
 const NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 export const MINIMAX_MODEL = "minimaxai/minimax-m3";
@@ -68,17 +68,15 @@ export async function callMiniMax(messages: any[], opts: MiniMaxOptions = {}): P
     }
     return readSSEStream(res, opts.onToken);
   }
-  // Fallback order, in full: MiniMax via NVIDIA → the identical MiniMax via
-  // OpenRouter (a change of wire, not of judge) → Gemini 3.6 Flash. Only the
-  // third step is a different model, and it is only ever reached when MiniMax
-  // is unreachable on both of its hosts.
+  // No unqualified backup. MiniMax is the only model whose chain was tested,
+  // so the only permitted substitution is the same model on a different wire
+  // (OpenRouter, for web where NVIDIA sends no CORS headers). DeepSeek and
+  // Gemini were fallbacks here and are gone: an untested model answering as
+  // Smart Gen would silently spend the qualification the tested one earned.
+  // If MiniMax is unreachable on both wires the call fails, and callers fall
+  // back to deterministic local behaviour rather than to another opinion.
   try {
     return await callOpenRouter("minimax/minimax-m3", messages, opts.onToken, { temperature: opts.temperature, maxTokens: opts.maxTokens ?? 4096 });
-  } catch (e) {
-    lastErr = e;
-  }
-  try {
-    return await callGoogleModel("gemini-3.6-flash", messages, opts.onToken, { temperature: opts.temperature, maxTokens: opts.maxTokens ?? 4096 });
   } catch {
     throw lastErr || new Error("MiniMax unavailable");
   }
@@ -92,12 +90,20 @@ export async function callMiniMax(messages: any[], opts: MiniMaxOptions = {}): P
 // turn, never dangled as an offer.
 type Recurring = "daily" | "weekly" | "monthly" | "yearly" | "weekdays" | "weekends";
 export type BoardAction =
-  | { action: "create"; cardType: "project" | "reminder" | "memory" | "artifact"; title: string; content?: string; due?: string; priority?: "high" | "none"; recurring?: Recurring; tags?: string[]; projectName?: string; isTask?: boolean; fields?: Record<string, string> }
-  | { action: "update"; cardId: string; title?: string; content?: string; due?: string | null; priority?: "high" | "none"; progress?: "todo" | "inprogress" | "done"; recurring?: Recurring | null; tags?: string[]; fields?: Record<string, string> }
+  | { action: "create"; cardType: "project" | "reminder" | "memory" | "artifact"; title: string; content?: string; due?: string; priority?: "high" | "none"; recurring?: Recurring; tags?: string[]; projectName?: string; isTask?: boolean; fields?: Record<string, string>; rows?: string[]; template?: "card" | "notebook" }
+  // Append rows to a notebook card. This is how the model keeps a journal:
+  // one card per subject, a row per thing learned — never a new card per line.
+  | { action: "addRows"; cardId: string; rows: string[] }
+  | { action: "update"; cardId: string; title?: string; content?: string; due?: string | null; priority?: "high" | "none"; progress?: "todo" | "inprogress" | "done"; recurring?: Recurring | null; tags?: string[]; fields?: Record<string, string>; rows?: string[]; template?: "card" | "notebook" }
   | { action: "convert"; cardId: string; toType: "project" | "reminder" | "memory" | "artifact" }
   | { action: "embed"; cardId: string; intoCardId: string }
   | { action: "defineField"; name: string; fieldType: "text" | "number" | "date" | "datetime" | "checkbox" | "select"; options?: string[]; cardTypes?: ("project" | "reminder" | "memory" | "artifact")[] }
-  | { action: "board"; view?: "board" | "list" | "calendar"; groupBy?: string; sortBy?: "due" | "created" | "priority" | "title" };
+  | { action: "board"; view?: "canvas" | "board" | "lanes" | "list" | "calendar" | "week" | "month" | "pages" | "circle"; groupBy?: string; sortBy?: "manual" | "due" | "created" | "priority" | "title" | "updated" | "type" }
+  // Trello's model, exposed to the model: boards are named lenses over the
+  // one shared card pool, each keeping its own view/lanes/sort/placements.
+  | { action: "createBoard"; name: string; view?: "canvas" | "board" | "lanes" | "list" | "calendar" | "week" | "month" | "pages" | "circle"; groupBy?: string }
+  | { action: "switchBoard"; name: string }
+  | { action: "renameBoard"; name: string; newName: string };
 
 const ACTIONS_FENCE = /```collider-actions\s*([\s\S]*?)```/;
 
@@ -125,6 +131,12 @@ export type BoardCardBrief = {
   projectName?: string;
   embeds?: number;
   fields?: Record<string, string>;
+  // Notebook cards are summarised by their row count and their first rows —
+  // the model needs to know a journal exists and roughly what is in it, not
+  // to re-read every entry on every turn.
+  rowCount?: number;
+  rowSample?: string[];
+  template?: "card" | "notebook";
 };
 
 const SMARTGEN_SYSTEM = [
@@ -137,7 +149,12 @@ const SMARTGEN_SYSTEM = [
   "```collider-actions",
   '[{"action":"create","cardType":"reminder","title":"...","due":"YYYY-MM-DD","priority":"high","tags":["legal"]}]',
   "```",
-  'Available actions: create (cardType project|reminder|memory|artifact; optional content, due "YYYY-MM-DD" or "YYYY-MM-DD HH:MM", priority high|none, recurring daily|weekly|monthly|yearly|weekdays|weekends, tags, projectName, isTask, fields), update (cardId + any of title/content/due/priority/progress/recurring/tags/fields), convert (cardId, toType), embed (cardId, intoCardId — either direction, any types), defineField (name, fieldType text|number|date|datetime|checkbox|select, options for select, cardTypes to attach as a default), board (view/groupBy/sortBy — groupBy accepts status|type|priority|project|tag or "field:<Name>" to swimlane by any attribute).',
+  'Available actions: create (cardType project|reminder|memory|artifact; optional content, due "YYYY-MM-DD" or "YYYY-MM-DD HH:MM", priority high|none, recurring daily|weekly|monthly|yearly|weekdays|weekends, tags, projectName, isTask, fields, rows, template card|notebook), addRows (cardId, rows), update (cardId + any of title/content/due/priority/progress/recurring/tags/fields/rows/template), convert (cardId, toType), embed (cardId, intoCardId — either direction, any types), defineField (name, fieldType text|number|date|datetime|checkbox|select, options for select, cardTypes to attach as a default), board (view canvas|board|lanes|list|calendar|week|month|pages|circle, groupBy status|type|priority|project|tag or "field:<Name>" to swimlane by any attribute, sortBy), createBoard (name; optional view/groupBy — a board is a named lens over the same cards, with its own lanes and layout), switchBoard (name), renameBoard (name, newName).',
+  "There can be several boards (like Trello): the user sees ONE at a time. Board actions apply to the currently active board. Create a new board when the user asks for a separate surface (a meal-planning board, a week view they keep), not for every grouping tweak.",
+  "MEMORIES ARE YOURS, NOT THE USER'S. They exist so you can serve this person better — their preferences, constraints, standing facts, how they like to be spoken to. Reminders are for the user; memories are for you. Never create a memory that is really a to-do.",
+  "A memory card is a NOTEBOOK: one card per subject, with a header title, holding many short rows. Write memories with addRows into an existing memory notebook whose header fits — only create a new memory card when no existing header covers the subject, and create it with template \"notebook\" and its first rows. One card per memory is wrong and wastes the board.",
+  "A row is one self-contained line of already-parsed meaning. No conversation links, no timestamps, no source references — a memory is retrieved, never re-read in context.",
+  "The notebook template suits anything that is a list under a heading — a packing list, a lore book, a reading log. Use template \"notebook\" for those instead of one card per line.",
   "URGENT (priority high) is binary and carries a deadline — the system defaults to now+12h if you omit one. CRITICAL is a separate binary attribute (checkbox field 'Critical'): it marks dependency, not time, and generates no deadline.",
   "Cards embed freely into each other in either direction and convert freely between types — use that to put things where they're relevant (an ingredient-list artifact embedded in the dinner reminder, a filing-form artifact embedded in the deadline card).",
   "Attributes are what make a set of cards comparable and groupable — fill the ones that exist, and define new ones with defineField when a set needs them (a score to sort by, a category whose options become swimlanes).",
@@ -148,10 +165,13 @@ export async function smartGenChat(
   history: ChatMessage[],
   prompt: string,
   board: BoardCardBrief[],
-  opts: { webSearch?: boolean; onToken?: (partial: string) => void; fieldDefs?: Record<string, { name: string; type: string; options?: string[] }> } = {},
+  opts: { webSearch?: boolean; onToken?: (partial: string) => void; fieldDefs?: Record<string, { name: string; type: string; options?: string[] }>; boards?: { name: string; active?: boolean; view?: string }[] } = {},
 ): Promise<string> {
   const boardJson = JSON.stringify(board).slice(0, 24000);
   const sysParts = [SMARTGEN_SYSTEM, `CURRENT BOARD (${board.length} cards):\n${boardJson}`, `Today's date: ${new Date().toISOString().split("T")[0]}`];
+  if (opts.boards?.length) {
+    sysParts.push(`BOARDS (switchBoard/renameBoard by name; the active one is what the user is looking at):\n${JSON.stringify(opts.boards)}`);
+  }
   if (opts.fieldDefs && Object.keys(opts.fieldDefs).length) {
     sysParts.push(`DEFINED ATTRIBUTES (use these before defining new ones):\n${JSON.stringify(Object.values(opts.fieldDefs))}`);
   }

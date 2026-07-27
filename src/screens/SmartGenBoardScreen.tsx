@@ -18,7 +18,7 @@ import {
   useCollider, newId, findCard,
   type AppState, type CardEmbed, type LinkKind, type Reminder,
   type BoardGroupBy, type BoardSortBy, type BoardView, type FieldDef, type FieldType,
-  type CardOrigin, type CardMedia, BUILTIN_FIELDS,
+  type CardOrigin, type CardMedia, type CardTemplate, BUILTIN_FIELDS, NOTEBOOK_PAGE_SIZE,
   collapsePriority,
 } from "../state";
 import { Glass } from "../components/Glass";
@@ -39,6 +39,24 @@ export const KIND_COLORS: Record<LinkKind, string> = {
   memory: "#34d399",
   artifact: "#e2e8f0",
 };
+// The paper itself is tinted by type. Pale enough that the card still reads as
+// paper and the text keeps its contrast, saturated enough that four cards side
+// by side sort themselves by colour before a single word is read — the accent
+// stripe alone was doing that job at 4px, which is not enough signal.
+const KIND_PAPER: Record<LinkKind, string> = {
+  project: "#e9f1fa",
+  reminder: "#efeafb",
+  memory: "#e8f5ee",
+  artifact: "#f1f0ec",
+};
+// Deep, legible ink of the same hue — used for the type glyph and the card's
+// own title, so potency comes from saturation of the mark, not of the field.
+const KIND_INK: Record<LinkKind, string> = {
+  project: "#1c5e93",
+  reminder: "#513a91",
+  memory: "#186449",
+  artifact: "#4a4a52",
+};
 const KIND_ICONS: Record<LinkKind, keyof typeof Ionicons.glyphMap> = {
   project: "briefcase-outline",
   reminder: "alarm-outline",
@@ -46,11 +64,16 @@ const KIND_ICONS: Record<LinkKind, keyof typeof Ionicons.glyphMap> = {
   artifact: "layers-outline",
 };
 const ALL_KINDS: LinkKind[] = ["project", "reminder", "memory", "artifact"];
+// "memorys" is what naive pluralisation produced on every apply-to-type
+// button; a label the user reads is worth four lines of table.
+const KIND_PLURAL: Record<LinkKind, string> = {
+  project: "projects", reminder: "reminders", memory: "memories", artifact: "artifacts",
+};
 const RECURRING_OPTIONS: NonNullable<Reminder["recurring"]>[] = ["daily", "weekdays", "weekends", "weekly", "monthly", "yearly"];
 const FIELD_TYPES = ["text", "number", "date", "datetime", "checkbox", "select"] as const;
 // Stored on customFields; "yes" = checked so absence and unchecked read the same.
 const CHECKED = "yes";
-const HIDE_COUNTDOWN_FIELD = "Hide countdown";
+const HIDE_COUNTDOWN_FIELD = "Hide timer";
 
 // ── Unified card shape ──────────────────────────────────────────────────────
 export type BoardCard = {
@@ -74,6 +97,8 @@ export type BoardCard = {
   origin?: CardOrigin;
   media?: CardMedia[];
   layout?: string[];
+  rows?: string[];
+  template?: CardTemplate;
 };
 
 function memoryTitle(content: string): string {
@@ -100,7 +125,7 @@ export function unifyCards(state: AppState): BoardCard[] {
       due: soonestUrgent,
       priority: soonestUrgent != null ? "high" : "none",
       progress: done ? "done" : "open",
-      tags: [], ts: 0, embeds: p.embeds || [], customFields: p.customFields || {}, origin: p.origin, media: p.media, layout: p.layout,
+      tags: [], ts: 0, embeds: p.embeds || [], customFields: p.customFields || {}, origin: p.origin, media: p.media, layout: p.layout, rows: p.rows, template: p.template,
     });
   }
   for (const r of state.reminders) {
@@ -108,7 +133,7 @@ export function unifyCards(state: AppState): BoardCard[] {
       ref: { kind: "reminder", id: r.id }, kind: "reminder", title: r.title, body: "",
       due: r.due, recurring: r.recurring, priority: collapsePriority(r.priority),
       progress: r.done ? "done" : "open",
-      tags: r.tags || [], projectId: r.projectId, ts: r.ts, embeds: r.embeds || [], customFields: r.customFields || {}, origin: r.origin, media: r.media, layout: r.layout,
+      tags: r.tags || [], projectId: r.projectId, ts: r.ts, embeds: r.embeds || [], customFields: r.customFields || {}, origin: r.origin, media: r.media, layout: r.layout, rows: r.rows, template: r.template,
     });
   }
   for (const m of state.memories) {
@@ -117,14 +142,14 @@ export function unifyCards(state: AppState): BoardCard[] {
       // text IS its title, and repeating it as body reads as a glitch.
       ref: { kind: "memory", id: m.id }, kind: "memory", title: memoryTitle(m.content), body: m.content.length > 84 ? m.content : "",
       priority: collapsePriority(m.priority), progress: "none",
-      tags: m.tags || [], projectId: m.projectId, ts: m.ts, embeds: m.embeds || [], customFields: m.customFields || {}, origin: m.origin, media: m.media, layout: m.layout,
+      tags: m.tags || [], projectId: m.projectId, ts: m.ts, embeds: m.embeds || [], customFields: m.customFields || {}, origin: m.origin, media: m.media, layout: m.layout, rows: m.rows, template: m.template,
     });
   }
   for (const a of state.artifacts) {
     cards.push({
       ref: { kind: "artifact", id: a.id }, kind: "artifact", title: a.title, body: a.content,
       priority: "none", progress: "none",
-      tags: [], projectId: a.projectId, ts: a.ts, embeds: a.embeds || [], customFields: a.customFields || {}, origin: a.origin, media: a.media, layout: a.layout,
+      tags: [], projectId: a.projectId, ts: a.ts, embeds: a.embeds || [], customFields: a.customFields || {}, origin: a.origin, media: a.media, layout: a.layout, rows: a.rows, template: a.template,
     });
   }
   return cards;
@@ -282,11 +307,31 @@ function KindBadge({ kind }: { kind: LinkKind }) {
   );
 }
 
-function BoardCardView({ card, now, all, onOpen, compact, onToggleDone, dragging, layout }: {
+function BoardCardView({ card, now, all, onOpen, compact, onToggleDone, dragging, layout, selected, template, expanded, onToggleExpand }: {
   card: BoardCard; now: number; all: BoardCard[]; onOpen: (ref: CardEmbed) => void; compact?: boolean;
-  onToggleDone?: (card: BoardCard) => void; dragging?: boolean; layout?: string[];
+  onToggleDone?: (card: BoardCard) => void; dragging?: boolean; layout?: string[]; selected?: boolean;
+  template?: CardTemplate;
+  // A card on the board is a summary. Tapping it opens it to full size in
+  // place — the editor is a separate, deliberate step, not what a glance
+  // costs you.
+  expanded?: boolean; onToggleExpand?: (card: BoardCard) => void;
 }) {
   const color = KIND_COLORS[card.kind];
+  const isNotebook = (template || "card") === "notebook";
+  const rows = card.rows || [];
+  // Notebook paging and search are per-card, live-only state: which page of a
+  // journal you are on is not a fact worth persisting.
+  const [rowPage, setRowPage] = useState(0);
+  const [rowQuery, setRowQuery] = useState("");
+  const matchedRows = rowQuery.trim()
+    ? rows.filter((r) => r.toLowerCase().includes(rowQuery.trim().toLowerCase()))
+    : rows;
+  const pageCount = Math.max(1, Math.ceil(matchedRows.length / NOTEBOOK_PAGE_SIZE));
+  const page = Math.min(rowPage, pageCount - 1);
+  const pageRows = matchedRows.slice(page * NOTEBOOK_PAGE_SIZE, page * NOTEBOOK_PAGE_SIZE + NOTEBOOK_PAGE_SIZE);
+  // Open enough to read: expanded by tap, or a notebook, which is a reading
+  // surface by definition and pointless at two lines.
+  const open = !!expanded || (isNotebook && !compact);
   const embedded = card.embeds.map((e) => all.find((c) => c.ref.kind === e.kind && c.ref.id === e.id)).filter(Boolean) as BoardCard[];
   const isUrgent = card.priority === "high";
   const hideCountdown = card.customFields[HIDE_COUNTDOWN_FIELD] === CHECKED;
@@ -295,27 +340,98 @@ function BoardCardView({ card, now, all, onOpen, compact, onToggleDone, dragging
   // The card face is just its layout, rendered in order. Every element is a
   // field the user can move or remove — nothing is structurally privileged,
   // and an element with nothing in it takes no space.
-  const order = card.layout || layout || ["title", "countdown", "recurring", "status", "tags", "media", "body", "embeds"];
+  const order = card.layout || layout || ["title", "countdown", "recurring", "status", "search", "rows", "tags", "media", "body", "embeds"];
 
   const render = (key: string) => {
     switch (key) {
       case "title":
         return (
-          <View key="title" style={{ flexDirection: "row", alignItems: "flex-start", gap: 7 }}>
-            {onToggleDone && card.progress !== "none" ? (
-              <Pressable onPress={() => onToggleDone(card)} hitSlop={8} style={{ marginTop: 1 }}>
-                <Ionicons name={isDone ? "checkbox" : "square-outline"} size={16} color={isDone ? "#3f7a52" : "rgba(22,22,26,0.3)"} />
-              </Pressable>
-            ) : (
-              <Ionicons name={KIND_ICONS[card.kind]} size={13} color={color} style={{ marginTop: 2 }} />
-            )}
-            <Text style={[local.cardTitle, isDone && { textDecorationLine: "line-through", color: "rgba(22,22,26,0.4)" }]} numberOfLines={2}>
-              {card.title}
-            </Text>
-            {isUrgent && <Text style={local.urgentWord}>URGENT</Text>}
-            {card.customFields["Critical"] === CHECKED && <Text style={local.criticalWord}>CRITICAL</Text>}
+          <View key="title" style={{ gap: isNotebook ? 6 : 0 }}>
+            <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 7 }}>
+              {onToggleDone && card.progress !== "none" ? (
+                <Pressable onPress={() => onToggleDone(card)} hitSlop={8} style={{ marginTop: 1 }}>
+                  <Ionicons name={isDone ? "checkbox" : "square-outline"} size={16} color={isDone ? "#3f7a52" : "rgba(22,22,26,0.3)"} />
+                </Pressable>
+              ) : (
+                <Ionicons name={KIND_ICONS[card.kind]} size={13} color={KIND_INK[card.kind]} style={{ marginTop: 2 }} />
+              )}
+              <Text
+                style={[
+                  local.cardTitle,
+                  isNotebook && local.notebookHeader,
+                  isDone && { textDecorationLine: "line-through", color: "rgba(22,22,26,0.4)" },
+                ]}
+                numberOfLines={open ? undefined : 2}
+              >
+                {card.title}
+              </Text>
+              {isUrgent && <Text style={local.urgentWord}>URGENT</Text>}
+              {card.customFields["Critical"] === CHECKED && <Text style={local.criticalWord}>CRITICAL</Text>}
+            </View>
+            {/* A notebook's header is a header: it rules off from its rows. */}
+            {isNotebook && <View style={[local.headerRule, { backgroundColor: `${KIND_INK[card.kind]}33` }]} />}
           </View>
         );
+      // A search bar is a card tool, not a screen feature — placed on any card
+      // that has rows worth searching, from the same layout list as every
+      // other field.
+      case "search": {
+        if (!open || rows.length <= NOTEBOOK_PAGE_SIZE) return null;
+        return (
+          <View key="search" style={local.rowSearch}>
+            <Ionicons name="search" size={11} color="rgba(22,22,26,0.4)" />
+            <TextInput
+              value={rowQuery}
+              onChangeText={(t) => { setRowQuery(t); setRowPage(0); }}
+              placeholder={`Search ${rows.length} entries...`}
+              placeholderTextColor="rgba(22,22,26,0.35)"
+              style={local.rowSearchInput}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            {!!rowQuery && (
+              <Pressable onPress={() => setRowQuery("")} hitSlop={6}>
+                <Ionicons name="close-circle" size={12} color="rgba(22,22,26,0.4)" />
+              </Pressable>
+            )}
+          </View>
+        );
+      }
+      // Rows — the notebook body. Closed, they are a count; open, they are a
+      // page of a journal with the page controls that go with it.
+      case "rows": {
+        if (!rows.length) return null;
+        if (!open) {
+          return (
+            <View key="rows" style={[local.chip, { borderColor: `${KIND_INK[card.kind]}33`, backgroundColor: `${KIND_INK[card.kind]}0f` }]}>
+              <Ionicons name="list-outline" size={10} color={KIND_INK[card.kind]} />
+              <Text style={[local.chipText, { color: KIND_INK[card.kind] }]}>{rows.length} entries</Text>
+            </View>
+          );
+        }
+        return (
+          <View key="rows" style={{ gap: 0 }}>
+            {pageRows.map((r, i) => (
+              <View key={`${page}-${i}`} style={local.notebookRow}>
+                <Text style={local.notebookRowNum}>{page * NOTEBOOK_PAGE_SIZE + i + 1}</Text>
+                <Text style={local.notebookRowText}>{r}</Text>
+              </View>
+            ))}
+            {matchedRows.length === 0 && <Text style={local.notebookEmpty}>No entry matches "{rowQuery}".</Text>}
+            {pageCount > 1 && (
+              <View style={local.pagerRow}>
+                <Pressable onPress={() => setRowPage(Math.max(0, page - 1))} disabled={page === 0} hitSlop={8} style={page === 0 ? { opacity: 0.25 } : undefined}>
+                  <Ionicons name="chevron-back" size={14} color={KIND_INK[card.kind]} />
+                </Pressable>
+                <Text style={[local.pagerText, { color: KIND_INK[card.kind] }]}>{page + 1} / {pageCount}</Text>
+                <Pressable onPress={() => setRowPage(Math.min(pageCount - 1, page + 1))} disabled={page >= pageCount - 1} hitSlop={8} style={page >= pageCount - 1 ? { opacity: 0.25 } : undefined}>
+                  <Ionicons name="chevron-forward" size={14} color={KIND_INK[card.kind]} />
+                </Pressable>
+              </View>
+            )}
+          </View>
+        );
+      }
       case "countdown":
         if (card.due == null || (isUrgent && hideCountdown)) return null;
         return <CountdownChip key="countdown" due={card.due} now={now} onLight />;
@@ -338,9 +454,9 @@ function BoardCardView({ card, now, all, onOpen, compact, onToggleDone, dragging
         if (!card.tags.length) return null;
         return <React.Fragment key="tags">{card.tags.slice(0, 4).map((t) => <Text key={t} style={local.tagText}>#{t}</Text>)}</React.Fragment>;
       case "media": {
-        if (compact || !card.media?.length) return null;
-        const imgs = card.media.filter((m) => m.kind === "image").slice(0, 3);
-        const docs = card.media.filter((m) => m.kind !== "image").slice(0, 2);
+        if ((compact && !open) || !card.media?.length) return null;
+        const imgs = card.media.filter((m) => m.kind === "image").slice(0, open ? 12 : 3);
+        const docs = card.media.filter((m) => m.kind !== "image").slice(0, open ? 12 : 2);
         return (
           <View key="media" style={{ flexDirection: "row", flexWrap: "wrap", gap: 5 }}>
             {imgs.map((m, i) => <Image key={i} source={{ uri: m.url }} style={local.cardImage} resizeMode="cover" />)}
@@ -354,8 +470,8 @@ function BoardCardView({ card, now, all, onOpen, compact, onToggleDone, dragging
         );
       }
       case "body":
-        if (compact || !card.body || card.kind === "reminder") return null;
-        return <Text key="body" style={local.cardBody} numberOfLines={2}>{card.body}</Text>;
+        if ((compact && !open) || !card.body || card.kind === "reminder") return null;
+        return <Text key="body" style={local.cardBody} numberOfLines={open ? undefined : 2}>{card.body}</Text>;
       case "origin":
         if (!card.origin) return null;
         return (
@@ -393,26 +509,48 @@ function BoardCardView({ card, now, all, onOpen, compact, onToggleDone, dragging
   // Chip-sized fields share a line instead of stacking; anything larger gets
   // its own row. Order still decides position either way.
   const INLINE = new Set(["countdown", "recurring", "status", "tags"]);
-  const rows: React.ReactNode[] = [];
+  const content: React.ReactNode[] = [];
   let run: React.ReactNode[] = [];
   const flush = () => {
     if (!run.length) return;
-    rows.push(<View key={`run${rows.length}`} style={{ flexDirection: "row", flexWrap: "wrap", gap: 5, alignItems: "center" }}>{run}</View>);
+    content.push(<View key={`run${content.length}`} style={{ flexDirection: "row", flexWrap: "wrap", gap: 5, alignItems: "center" }}>{run}</View>);
     run = [];
   };
   for (const key of order) {
     const node = render(key);
     if (!node) continue;
     if (INLINE.has(key)) run.push(node);
-    else { flush(); rows.push(node); }
+    else { flush(); content.push(node); }
   }
   flush();
 
   return (
-    <Pressable onPress={() => onOpen(card.ref)}>
-      <View style={[local.card, dragging && local.cardDragging]}>
-        <View style={[local.cardAccent, { backgroundColor: color }]} />
-        <View style={{ flex: 1, padding: 11, gap: 6 }}>{rows}</View>
+    // Tap opens the card in place when the board offers that; where it
+    // doesn't (embedded previews, the pages view) tap still goes straight to
+    // the editor, so no surface ends up with a dead card.
+    <Pressable onPress={() => (onToggleExpand ? onToggleExpand(card) : onOpen(card.ref))}>
+      <View style={[local.card, { backgroundColor: KIND_PAPER[card.kind] }, isNotebook && local.notebookCard, dragging && local.cardDragging, selected && local.cardSelected]}>
+        {/* No corner tab. A card's type is already carried by its paper tint
+            and by the mark beside its title — a third label saying the same
+            word is ornament, and ornament is what makes a surface look dated. */}
+        <View style={{ flex: 1, padding: 12, gap: 6 }}>
+          {content}
+          {/* Open cards offer the editor explicitly; closed ones stay silent. */}
+          {open && !!onToggleExpand && (
+            <View style={local.cardActions}>
+              <Pressable onPress={() => onOpen(card.ref)} hitSlop={6} style={local.cardActionBtn}>
+                <Ionicons name="create-outline" size={11} color={KIND_INK[card.kind]} />
+                <Text style={[local.cardActionText, { color: KIND_INK[card.kind] }]}>Edit</Text>
+              </Pressable>
+              {!!expanded && (
+                <Pressable onPress={() => onToggleExpand(card)} hitSlop={6} style={local.cardActionBtn}>
+                  <Ionicons name="contract-outline" size={11} color="rgba(22,22,26,0.45)" />
+                  <Text style={local.cardActionText}>Collapse</Text>
+                </Pressable>
+              )}
+            </View>
+          )}
+        </View>
       </View>
     </Pressable>
   );
@@ -463,6 +601,8 @@ function executeBoardActions(actions: BoardAction[], dispatch: any, getState: ()
         else if (a.cardType === "project") dispatch({ type: "project", id, name: a.title, fingerprint: id });
         else dispatch({ type: "artifact", id, title: a.title, content: a.content || "", kind: "custom", projectId, fingerprint: id });
         if (a.fields && Object.keys(a.fields).length) dispatch({ type: "setCardFields", ref: { kind: a.cardType, id }, fields: a.fields });
+        if (a.rows?.length) dispatch({ type: "addCardRows", ref: { kind: a.cardType, id }, rows: a.rows });
+        if (a.template) dispatch({ type: "setCardTemplate", ref: { kind: a.cardType, id }, template: a.template });
         applied++;
       } else if (a.action === "update") {
         const ref = ALL_KINDS.map((k) => ({ kind: k, id: a.cardId })).find((r) => findCard(state, r));
@@ -473,7 +613,13 @@ function executeBoardActions(actions: BoardAction[], dispatch: any, getState: ()
         else if (ref.kind === "project") dispatch({ type: "updateProject", project: { ...item, name: a.title ?? item.name } });
         else dispatch({ type: "updateArtifact", artifact: { ...item, title: a.title ?? item.title, content: a.content ?? item.content } });
         if (a.fields) dispatch({ type: "setCardFields", ref, fields: { ...(item.customFields || {}), ...a.fields } });
+        if (a.rows) dispatch({ type: "setCardRows", ref, rows: a.rows });
+        if (a.template) dispatch({ type: "setCardTemplate", ref, template: a.template });
         applied++;
+      } else if (a.action === "addRows") {
+        // The journal grows by appending. Nothing already written is touched.
+        const ref = ALL_KINDS.map((k) => ({ kind: k, id: a.cardId })).find((r) => findCard(state, r));
+        if (ref && a.rows?.length) { dispatch({ type: "addCardRows", ref, rows: a.rows }); applied++; }
       } else if (a.action === "convert") {
         const ref = ALL_KINDS.map((k) => ({ kind: k, id: a.cardId })).find((r) => findCard(state, r));
         if (ref) { dispatch({ type: "convertCard", ref, toKind: a.toType }); applied++; }
@@ -490,6 +636,20 @@ function executeBoardActions(actions: BoardAction[], dispatch: any, getState: ()
         if (a.groupBy) config.groupBy = a.groupBy;
         if (a.sortBy) config.sortBy = a.sortBy;
         if (Object.keys(config).length) { dispatch({ type: "setBoardConfig", config }); applied++; }
+      } else if (a.action === "createBoard") {
+        if (a.name?.trim()) {
+          const config: any = {};
+          if (a.view) config.view = a.view;
+          if (a.groupBy) config.groupBy = a.groupBy;
+          dispatch({ type: "createBoard", id: newId("bd"), name: a.name, config });
+          applied++;
+        }
+      } else if (a.action === "switchBoard") {
+        const b = state.boards.find((x) => x.name.trim().toLowerCase() === (a.name || "").trim().toLowerCase());
+        if (b) { dispatch({ type: "switchBoard", id: b.id }); applied++; }
+      } else if (a.action === "renameBoard") {
+        const b = state.boards.find((x) => x.name.trim().toLowerCase() === (a.name || "").trim().toLowerCase());
+        if (b && a.newName?.trim()) { dispatch({ type: "renameBoard", id: b.id, name: a.newName }); applied++; }
       }
     } catch {
       // One malformed action never blocks the rest of the batch.
@@ -511,17 +671,27 @@ function toBriefs(cards: BoardCard[], state: AppState): BoardCardBrief[] {
     projectName: c.projectId ? state.projects.find((p) => p.id === c.projectId)?.name : undefined,
     embeds: c.embeds.length || undefined,
     fields: Object.keys(c.customFields).length ? c.customFields : undefined,
+    // Enough for the model to route a new row to the right notebook without
+    // carrying every journal entry in the system prompt.
+    template: c.template || state.cardTemplates?.[c.kind],
+    rowCount: c.rows?.length || undefined,
+    rowSample: c.rows?.length ? c.rows.slice(0, 3) : undefined,
   }));
 }
 
 // ── Shared view pieces ──────────────────────────────────────────────────────
-function ColumnHeader({ color, label, count }: { color: string; label: string; count: number }) {
+// onPress (when the lane axis is user-owned) opens the lane editor — the
+// Trello gesture of tapping a list's title to change it.
+function ColumnHeader({ color, label, count, onPress }: { color: string; label: string; count: number; onPress?: () => void }) {
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 8, paddingHorizontal: 2 }}>
-      <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: color }} />
-      <Text style={local.colTitle}>{label}</Text>
-      <Text style={local.colCount}>{count}</Text>
-    </View>
+    <Pressable onPress={onPress} disabled={!onPress} style={{ marginBottom: 9, paddingHorizontal: 2, gap: 5 }}>
+      <View style={{ flexDirection: "row", alignItems: "baseline", gap: 7 }}>
+        <Text style={local.colTitle}>{label}</Text>
+        <Text style={local.colCount}>{count}</Text>
+        {!!onPress && <Ionicons name="pencil-outline" size={9} color="rgba(238,241,246,0.35)" />}
+      </View>
+      <View style={{ height: 1.5, borderRadius: 1, backgroundColor: color, opacity: 0.45 }} />
+    </Pressable>
   );
 }
 
@@ -619,7 +789,13 @@ type DragCtx = {
   onPickUp: () => void;
 };
 
-function DraggableCard({ card, ctx, children }: { card: BoardCard; ctx: DragCtx | null; children: React.ReactNode }) {
+// Free placement: the card sits at an exact point on the canvas and a drag
+// simply moves that point. No zone decides where it lands, nothing snaps it
+// back, and nothing re-flows around it — a card stays where it was put until
+// the user presses Align or picks a sort.
+type FreeCtx = { x: number; y: number; width: number; onMove: (card: BoardCard, x: number, y: number) => void };
+
+function DraggableCard({ card, ctx, children, free, elevated }: { card: BoardCard; ctx: DragCtx | null; children: React.ReactNode; free?: FreeCtx; elevated?: boolean }) {
   const pan = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const [dragging, setDragging] = useState(false);
   const viewRef = useRef<View | null>(null);
@@ -633,7 +809,7 @@ function DraggableCard({ card, ctx, children }: { card: BoardCard; ctx: DragCtx 
         // consulted and the card could never be dragged. Capturing on move
         // lets the drag take over from the tap once the finger travels past
         // the threshold — below it, taps still open the card.
-        onMoveShouldSetPanResponderCapture: (_e, g) => !!ctx && (Math.abs(g.dx) > 8 || Math.abs(g.dy) > 8),
+        onMoveShouldSetPanResponderCapture: (_e, g) => (!!ctx || !!free) && (Math.abs(g.dx) > 8 || Math.abs(g.dy) > 8),
         onPanResponderGrant: () => {
           setDragging(true);
           ctx?.onPickUp();
@@ -648,6 +824,12 @@ function DraggableCard({ card, ctx, children }: { card: BoardCard; ctx: DragCtx 
         onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], { useNativeDriver: false }),
         onPanResponderRelease: (e, g) => {
           setDragging(false);
+          if (free) {
+            // Where the finger let go IS the position. Nothing else consulted.
+            free.onMove(card, Math.max(0, free.x + g.dx), Math.max(0, free.y + g.dy));
+            pan.setValue({ x: 0, y: 0 });
+            return;
+          }
           const pageX = e.nativeEvent.pageX || g.moveX;
           const pageY = e.nativeEvent.pageY || g.moveY;
           ctx?.onDrop(card, pageX, pageY);
@@ -657,7 +839,7 @@ function DraggableCard({ card, ctx, children }: { card: BoardCard; ctx: DragCtx 
         },
         onPanResponderTerminate: () => { setDragging(false); pan.setValue({ x: 0, y: 0 }); },
       }),
-    [ctx, card]
+    [ctx, card, free?.x, free?.y]
   );
 
   return (
@@ -673,10 +855,11 @@ function DraggableCard({ card, ctx, children }: { card: BoardCard; ctx: DragCtx 
       }}
       collapsable={false}
       style={[
-        { transform: pan.getTranslateTransform(), zIndex: dragging ? 999 : 0, opacity: dragging ? 0.93 : 1 },
+        { transform: pan.getTranslateTransform(), zIndex: dragging ? 999 : elevated ? 500 : 0, opacity: dragging ? 0.93 : 1 },
+        free ? ({ position: "absolute", left: free.x, top: free.y, width: free.width } as any) : null,
         Platform.OS === "web" ? ({ userSelect: "none", cursor: "grab" } as any) : null,
       ]}
-      {...(ctx ? responder.panHandlers : {})}
+      {...(ctx || free ? responder.panHandlers : {})}
     >
       {children}
     </Animated.View>
@@ -726,6 +909,25 @@ export function SmartGenBoardScreen({ goBack }: { goBack: () => void }) {
   const [askMode, setAskMode] = useState(false);
   const [detailRef, setDetailRef] = useState<CardEmbed | null>(null);
   const [fieldsManagerOpen, setFieldsManagerOpen] = useState(false);
+  // Trello's chrome: the board's name opens the switcher, the menu edits the
+  // board you're standing on.
+  const [boardsOpen, setBoardsOpen] = useState(false);
+  const [boardMenuOpen, setBoardMenuOpen] = useState(false);
+  const [laneEdit, setLaneEdit] = useState<{ key: string; label: string } | null>(null);
+  const activeBoard = state.boards.find((b) => b.id === state.activeBoardId);
+  // Which cards are open to full size. More than one at a time is allowed —
+  // comparing two open cards is the whole reason to open them in place rather
+  // than in a modal that covers everything else.
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
+  const toggleExpand = (card: BoardCard) => {
+    const k = cardKey(card);
+    setExpandedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k); else next.add(k);
+      return next;
+    });
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+  };
 
   const allCards = useMemo(() => unifyCards(state), [state.projects, state.reminders, state.memories, state.artifacts]);
   const hasUrgent = allCards.some((c) => c.due != null && c.due - Date.now() < 3600e3 && c.due > Date.now() - 86400e3);
@@ -749,7 +951,193 @@ export function SmartGenBoardScreen({ goBack }: { goBack: () => void }) {
   }, [allCards, embeddedIds, filter, sortBy, state.smartBoard.order, state.smartBoard.hideDone]);
 
   const columns = useMemo(() => groupCards(visible, groupBy, state), [visible, groupBy, state.projects]);
-  const openDetail = (ref: CardEmbed) => setDetailRef(ref);
+  // Select mode. The bulk-remove reducers already existed for the per-type
+  // screens; the board just had no way to reach them.
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const openDetail = (ref: CardEmbed) => {
+    if (!selectMode) { setDetailRef(ref); return; }
+    const k = `${ref.kind}:${ref.id}`;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(k) ? next.delete(k) : next.add(k);
+      return next;
+    });
+  };
+  const exitSelect = () => { setSelectMode(false); setSelected(new Set()); };
+
+  // Creation lived only on the four per-type screens, so the board — the
+  // surface this app actually puts in front of people — had no way to make
+  // anything. A card is created, placed at the front of manual order, and
+  // opened for editing in one action.
+  const [newCardOpen, setNewCardOpen] = useState(false);
+  const createCard = (kind: LinkKind) => {
+    const id = newId(kind === "artifact" ? "art" : kind[0]);
+    if (kind === "project") dispatch({ type: "project", id, name: "New project", fingerprint: id });
+    else if (kind === "reminder") dispatch({ type: "reminder", id, title: "New reminder", fingerprint: id });
+    else if (kind === "memory") dispatch({ type: "memory", id, content: "New memory", fingerprint: id });
+    else dispatch({ type: "artifact", id, title: "New artifact", content: "", kind: "custom", fingerprint: id });
+    const key = `${kind}:${id}`;
+    dispatch({ type: "reorderCards", keys: [key, ...visible.map(cardKey)] });
+    setNewCardOpen(false);
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setDetailRef({ kind, id });
+  };
+  const selectAllVisible = () => {
+    const all = visible.map(cardKey);
+    setSelected(selected.size >= all.length ? new Set() : new Set(all));
+  };
+  const deleteSelected = () => {
+    const byKind: Record<string, string[]> = { memory: [], reminder: [], project: [], artifact: [] };
+    for (const k of selected) {
+      const kind = k.slice(0, k.indexOf(":"));
+      const id = k.slice(k.indexOf(":") + 1);
+      if (byKind[kind]) byKind[kind].push(id);
+    }
+    if (byKind.memory.length) dispatch({ type: "removeMemories", ids: byKind.memory });
+    if (byKind.reminder.length) dispatch({ type: "removeReminders", ids: byKind.reminder });
+    if (byKind.project.length) dispatch({ type: "removeProjects", ids: byKind.project });
+    if (byKind.artifact.length) dispatch({ type: "removeArtifacts", ids: byKind.artifact });
+    toast(`Deleted ${selected.size} card${selected.size === 1 ? "" : "s"}`);
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    exitSelect();
+  };
+
+  // ── Trello-style lane editing ─────────────────────────────────────────────
+  // Lanes are editable where the axis itself is user-owned: a select field's
+  // options (add/rename/delete) and projects (add/rename). Structural axes —
+  // status, type, priority — are what they are.
+  const laneAxis: "field" | "project" | null = groupBy.startsWith("field:") ? "field" : groupBy === "project" ? "project" : null;
+  const addLane = (raw: string) => {
+    const name = raw.trim();
+    if (!name || !laneAxis) return;
+    if (laneAxis === "project") { dispatch({ type: "project", name }); return; }
+    const fname = groupBy.slice(6);
+    const def: FieldDef = state.fieldDefs[fname] || { name: fname, type: "select" };
+    const options = def.options || [];
+    if (options.some((o) => o.toLowerCase() === name.toLowerCase())) return;
+    dispatch({ type: "defineField", def: { ...def, options: [...options, name] } });
+  };
+  const renameLane = (key: string, next: string) => {
+    const name = next.trim();
+    if (!name || !laneAxis || key === "__none" || name === key) return;
+    if (laneAxis === "project") {
+      const p = state.projects.find((x) => x.id === key);
+      if (p && p.name !== name) dispatch({ type: "updateProject", project: { ...p, name } });
+      return;
+    }
+    const fname = groupBy.slice(6);
+    const def = state.fieldDefs[fname];
+    if (def) dispatch({ type: "defineField", def: { ...def, options: Array.from(new Set((def.options || []).map((o) => (o === key ? name : o)))) } });
+    // The lane IS the value on its cards — renaming one renames the other.
+    for (const c of columns.find((col) => col.key === key)?.cards || []) {
+      dispatch({ type: "setCardFields", ref: c.ref, fields: { ...c.customFields, [fname]: name } });
+    }
+  };
+  const deleteLane = (key: string) => {
+    if (laneAxis !== "field" || key === "__none") return;
+    const fname = groupBy.slice(6);
+    const def = state.fieldDefs[fname];
+    if (def) dispatch({ type: "defineField", def: { ...def, options: (def.options || []).filter((o) => o !== key) } });
+  };
+  // Only an option-backed empty lane can be deleted — a lane holding cards is
+  // those cards' value, and a lane a card conjured disappears with the value.
+  const laneDeletable = (key: string) => laneAxis === "field" && (columns.find((c) => c.key === key)?.cards.length || 0) === 0;
+  const laneHeaderPress = (c: Column) => (laneAxis && c.key !== "__none" ? () => setLaneEdit({ key: c.key, label: c.label }) : undefined);
+  // Everything about how a card renders, resolved once: its type's layout and
+  // face unless the card overrides them, plus its open/closed state.
+  const cardFace = (card: BoardCard) => ({
+    selected: selectMode && selected.has(cardKey(card)),
+    layout: state.cardLayout?.[card.kind],
+    template: card.template || state.cardTemplates?.[card.kind] || ("card" as CardTemplate),
+    expanded: expandedKeys.has(cardKey(card)),
+    onToggleExpand: toggleExpand,
+  });
+
+  // ── Canvas geometry ───────────────────────────────────────────────────────
+  const CANVAS_CARD_W = Math.min(SCREEN_W * 0.62, 258);
+  const CANVAS_GAP = 12;
+  const canvasCols = Math.max(1, Math.floor((SCREEN_W - 24) / (CANVAS_CARD_W + CANVAS_GAP)));
+  // Cards are different heights — an open notebook is not a two-line reminder
+  // — so a fixed row pitch either overlaps them or leaves craters. Estimating
+  // each card's height and packing columns independently keeps the untouched
+  // cards tidy without ever moving a card the user placed.
+  // Characters that fit on one line at the canvas card width — the basis for
+  // every wrap estimate below. Deliberately conservative: a card packed with
+  // a little too much room reads as breathing space, one packed with too
+  // little reads as a bug.
+  const CPL = Math.max(18, Math.floor(CANVAS_CARD_W / 6.6));
+  const estimateHeight = (card: BoardCard): number => {
+    const face = cardFace(card);
+    const open = face.expanded || face.template === "notebook";
+    const lines = (text: string, cpl = CPL) => Math.max(1, Math.ceil(text.length / cpl));
+    let h = 30; // padding + type mark
+    h += Math.min(open ? 4 : 2, lines(card.title, CPL - 6)) * 18;
+    if (face.template === "notebook") h += 9; // header rule
+    if (card.due != null || card.recurring || card.tags.length || card.customFields["Status"]) h += 26;
+    if (card.rows?.length) {
+      if (!open) h += 26;
+      else {
+        if (card.rows.length > NOTEBOOK_PAGE_SIZE) h += 32 + 28; // search bar + pager
+        h += card.rows
+          .slice(0, NOTEBOOK_PAGE_SIZE)
+          .reduce((sum, r) => sum + 11 + lines(r, CPL - 3) * 16, 0);
+      }
+    }
+    if (card.body && card.kind !== "reminder") h += open ? Math.min(360, lines(card.body) * 16) : 34;
+    if (card.media?.length) h += 60;
+    if (card.embeds.length) h += card.embeds.length * 28;
+    if (face.expanded) h += 30; // the Edit / Collapse row
+    return Math.round(h);
+  };
+  // Estimates get the first frame right; measurements get every frame after
+  // it right. A card that has been laid out reports its true height, so
+  // opening one in place re-packs the cards below it exactly.
+  const [heights, setHeights] = useState<Record<string, number>>({});
+  const noteHeight = (key: string, h: number) =>
+    setHeights((prev) => (Math.abs((prev[key] ?? 0) - h) < 2 ? prev : { ...prev, [key]: h }));
+  const heightOf = (card: BoardCard) => heights[cardKey(card)] ?? estimateHeight(card);
+  // A card that has never been placed still needs somewhere to be: it flows
+  // into the shortest column. Placed cards are read straight from state and
+  // never take part in the packing.
+  const flowPositions = useMemo(() => {
+    const colY = new Array(canvasCols).fill(0);
+    const out: Record<string, { x: number; y: number }> = {};
+    for (const c of visible) {
+      const k = cardKey(c);
+      const placed = state.smartBoard.pos?.[k];
+      if (placed) continue;
+      let col = 0;
+      for (let i = 1; i < canvasCols; i++) if (colY[i] < colY[col]) col = i;
+      out[k] = { x: col * (CANVAS_CARD_W + CANVAS_GAP), y: colY[col] };
+      colY[col] += heightOf(c) + CANVAS_GAP;
+    }
+    return out;
+  }, [visible, state.smartBoard.pos, expandedKeys, canvasCols, heights]);
+  const posFor = (key: string) => state.smartBoard.pos?.[key] || flowPositions[key] || { x: 0, y: 0 };
+  const canvasSize = visible.reduce(
+    (acc, c) => {
+      const p = posFor(cardKey(c));
+      return { w: Math.max(acc.w, p.x + CANVAS_CARD_W), h: Math.max(acc.h, p.y + heightOf(c)) };
+    },
+    { w: SCREEN_W - 24, h: 320 }
+  );
+  // Align — the one command that tidies everything, including cards that were
+  // placed by hand. Reading order is the board's current order, so an active
+  // sort is what alignment expresses; on manual sort it is the order you see.
+  const alignNow = () => {
+    const colY = new Array(canvasCols).fill(0);
+    const positions: Record<string, { x: number; y: number }> = {};
+    for (const c of visible) {
+      let col = 0;
+      for (let i = 1; i < canvasCols; i++) if (colY[i] < colY[col]) col = i;
+      positions[cardKey(c)] = { x: col * (CANVAS_CARD_W + CANVAS_GAP), y: colY[col] };
+      colY[col] += heightOf(c) + CANVAS_GAP;
+    }
+    dispatch({ type: "setCardPositions", positions });
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    toast(`Aligned ${visible.length} cards — drag any of them anywhere again`);
+  };
 
   // ── Drop targets ──────────────────────────────────────────────────────────
   const zones = useRef<Record<string, { ref: View | null; rect: Rect | null }>>({});
@@ -905,7 +1293,24 @@ export function SmartGenBoardScreen({ goBack }: { goBack: () => void }) {
 
   return (
     <Page title="Smart Gen Board" goBack={goBack} noScroll>
-      <View style={{ flex: 1, backgroundColor: "#07080b" }}>
+      {/* The board inherits the app's own background — same wallpaper, same
+          aurora, same field the home grid sits on. It is a surface within the
+          app, not a separate one. "Cover" paints it opaque for anyone who
+          wants the cards on a plain ground instead. */}
+      <View style={{ flex: 1, backgroundColor: state.smartBoard.background || (state.smartBoard.coverBackground ? "#07080b" : "transparent") }}>
+        {/* Board bar — Trello's top chrome: tap the name to switch boards,
+            the menu to edit the one you're on. One card pool, many boards;
+            each board is a named lens with its own lanes and layout. */}
+        <View style={local.boardBar}>
+          <Pressable onPress={() => setBoardsOpen(true)} style={local.boardNameBtn}>
+            <Ionicons name="albums-outline" size={13} color="rgba(238,241,246,0.7)" />
+            <Text style={local.boardName} numberOfLines={1}>{activeBoard?.name || "Board"}</Text>
+            <Ionicons name="chevron-down" size={11} color="rgba(238,241,246,0.45)" />
+          </Pressable>
+          <Pressable onPress={() => setBoardMenuOpen(true)} style={local.iconBtn}>
+            <Ionicons name="ellipsis-horizontal" size={15} color="rgba(238,241,246,0.7)" />
+          </Pressable>
+        </View>
         {/* View switcher — the board type is itself an adjustable attribute,
             for the user and for the model alike (board action "board"). */}
         <View style={local.switcherRow}>
@@ -918,6 +1323,7 @@ export function SmartGenBoardScreen({ goBack }: { goBack: () => void }) {
                 else { setAskMode(false); dispatch({ type: "setBoardConfig", config: { view: v as BoardView } }); }
               }}
               options={[
+                { label: "Canvas — free placement", value: "canvas" },
                 { label: "Board — vertical lanes", value: "board" },
                 { label: "Lanes — horizontal", value: "lanes" },
                 { label: "List", value: "list" },
@@ -948,16 +1354,63 @@ export function SmartGenBoardScreen({ goBack }: { goBack: () => void }) {
               <View style={{ flex: 1 }}>
                 <Picker value={sortBy} onChange={(v) => dispatch({ type: "setBoardConfig", config: { sortBy: v as BoardSortBy } })} options={sortOptions} />
               </View>
+            </View>
+            <View style={[local.controlsRow, { marginTop: 6 }]}>
+              <Pressable onPress={() => setNewCardOpen(true)} style={local.iconBtn}>
+                <Ionicons name="add" size={17} color="rgba(238,241,246,0.85)" />
+              </Pressable>
+              <Pressable
+                onPress={() => (selectMode ? exitSelect() : setSelectMode(true))}
+                style={[local.iconBtn, selectMode && { backgroundColor: "rgba(167,139,250,0.18)" }]}
+              >
+                <Ionicons name={selectMode ? "checkmark-circle" : "ellipse-outline"} size={15} color={selectMode ? "#a78bfa" : "rgba(238,241,246,0.7)"} />
+              </Pressable>
               <Pressable
                 onPress={() => dispatch({ type: "setBoardConfig", config: { hideDone: !state.smartBoard.hideDone } })}
                 style={[local.iconBtn, state.smartBoard.hideDone && { backgroundColor: "rgba(52,211,153,0.15)" }]}
               >
                 <Ionicons name={state.smartBoard.hideDone ? "eye-off-outline" : "checkmark-done-outline"} size={15} color={state.smartBoard.hideDone ? "#34d399" : "rgba(238,241,246,0.7)"} />
               </Pressable>
+              {/* Background — inherit the app's wallpaper (default) or let the
+                  board cover it. */}
+              <Pressable
+                onPress={() => dispatch({ type: "setBoardConfig", config: { coverBackground: !state.smartBoard.coverBackground } })}
+                style={[local.iconBtn, state.smartBoard.coverBackground && { backgroundColor: "rgba(93,189,255,0.15)" }]}
+              >
+                <Ionicons
+                  name={state.smartBoard.coverBackground ? "square" : "image-outline"}
+                  size={15}
+                  color={state.smartBoard.coverBackground ? "#5dbdff" : "rgba(238,241,246,0.7)"}
+                />
+              </Pressable>
+              {/* Align — the only thing that tidies the canvas, and only when
+                  pressed. Nothing snaps on its own. */}
+              {view === "canvas" && (
+                <Pressable onPress={alignNow} style={local.iconBtn}>
+                  <Ionicons name="grid-outline" size={15} color="rgba(238,241,246,0.7)" />
+                </Pressable>
+              )}
               <Pressable onPress={() => setFieldsManagerOpen(true)} style={local.iconBtn}>
                 <Ionicons name="options-outline" size={15} color="rgba(238,241,246,0.7)" />
               </Pressable>
             </View>
+            {selectMode && (
+              <View style={local.selectBar}>
+                <Pressable onPress={selectAllVisible} hitSlop={6}>
+                  <Text style={local.selectBarText}>
+                    {selected.size >= visible.length && visible.length > 0 ? "Select none" : `Select all ${visible.length}`}
+                  </Text>
+                </Pressable>
+                <View style={{ flex: 1 }} />
+                <Text style={[local.selectBarText, { opacity: 0.6 }]}>{selected.size} selected</Text>
+                <Pressable onPress={deleteSelected} disabled={!selected.size} hitSlop={6} style={!selected.size ? { opacity: 0.35 } : undefined}>
+                  <Text style={[local.selectBarText, { color: "#f87171" }]}>Delete</Text>
+                </Pressable>
+                <Pressable onPress={exitSelect} hitSlop={6}>
+                  <Text style={local.selectBarText}>Done</Text>
+                </Pressable>
+              </View>
+            )}
             <View style={{ paddingHorizontal: 12, marginTop: 6 }}>
               <View style={local.searchContainer}>
                 <Ionicons name="search" size={13} color="rgba(255,255,255,0.4)" style={{ marginRight: 7 }} />
@@ -978,6 +1431,49 @@ export function SmartGenBoardScreen({ goBack }: { goBack: () => void }) {
               </View>
             </View>
 
+            {/* Canvas — free placement. A card goes exactly where it is put
+                and stays there: no lane claims it, no sort re-flows it, no
+                grid snaps it. Order and alignment happen only when the user
+                asks (Sort, or the Align button above). Drag-to-embed is not
+                wired here on purpose — on a surface whose entire point is
+                putting a card next to another card, "on top of" must not
+                silently mean "inside". Embedding lives in the card editor and
+                in the lane views. */}
+            {view === "canvas" && (
+              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 12, paddingBottom: 60 }}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                  <View style={{ width: canvasSize.w + 20, height: canvasSize.h + 40 }}>
+                    {visible.map((card) => {
+                      const k = cardKey(card);
+                      const p = posFor(k);
+                      return (
+                        <DraggableCard
+                          key={k}
+                          card={card}
+                          ctx={null}
+                          free={{
+                            x: p.x, y: p.y, width: CANVAS_CARD_W,
+                            onMove: (c, x, y) => dispatch({ type: "setCardPos", key: cardKey(c), x, y }),
+                          }}
+                          // An open card overlays its neighbours instead of
+                          // being clipped by them — opening is a foreground
+                          // act, and nothing else moves out of its way.
+                          elevated={expandedKeys.has(k)}
+                        >
+                          <View onLayout={(e) => noteHeight(k, e.nativeEvent.layout.height)}>
+                            <BoardCardView card={card} now={now} all={allCards} onOpen={openDetail} onToggleDone={toggleDone} {...cardFace(card)} />
+                          </View>
+                        </DraggableCard>
+                      );
+                    })}
+                    {visible.length === 0 && (
+                      <Text style={[styles.muted, { textAlign: "center", marginTop: 60 }]}>No cards yet — Smart Gen fills this board from your conversations.</Text>
+                    )}
+                  </View>
+                </ScrollView>
+              </ScrollView>
+            )}
+
             {/* Vertical swimlanes. Columns are drop zones; a card put in one
                 takes on that column's meaning and keeps the position you
                 gave it. */}
@@ -985,17 +1481,21 @@ export function SmartGenBoardScreen({ goBack }: { goBack: () => void }) {
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 10, gap: 10 }}>
                 {columns.map((c) => (
                   <View key={c.key} ref={registerZone(c.key)} collapsable={false} style={{ width: colW }}>
-                    <ColumnHeader color={c.color} label={c.label} count={c.cards.length} />
+                    <ColumnHeader color={c.color} label={c.label} count={c.cards.length} onPress={laneHeaderPress(c)} />
                     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 30, minHeight: 90 }}>
                       {c.cards.map((card) => (
                         <DraggableCard key={cardKey(card)} card={card} ctx={dragCtx}>
-                          <BoardCardView card={card} now={now} all={allCards} onOpen={openDetail} onToggleDone={toggleDone} layout={state.cardLayout?.[card.kind]} />
+                          <BoardCardView card={card} now={now} all={allCards} onOpen={openDetail} onToggleDone={toggleDone} {...cardFace(card)} />
                         </DraggableCard>
                       ))}
                       {c.cards.length === 0 && <Text style={local.emptyCol}>Drop here</Text>}
                     </ScrollView>
                   </View>
                 ))}
+                {/* Trello's "+ Add another list" — present only where the
+                    lane axis is user-owned (a select field's options, or
+                    projects), because there it genuinely creates a lane. */}
+                {laneAxis && <AddLaneGhost width={colW} onAdd={addLane} />}
               </ScrollView>
             )}
 
@@ -1006,13 +1506,13 @@ export function SmartGenBoardScreen({ goBack }: { goBack: () => void }) {
                 {columns.map((c) => (
                   <View key={c.key} ref={registerZone(c.key)} collapsable={false} style={{ gap: 7 }}>
                     <View style={{ paddingHorizontal: 12 }}>
-                      <ColumnHeader color={c.color} label={c.label} count={c.cards.length} />
+                      <ColumnHeader color={c.color} label={c.label} count={c.cards.length} onPress={laneHeaderPress(c)} />
                     </View>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 12, gap: 8, minWidth: SCREEN_W }}>
                       {c.cards.map((card) => (
                         <DraggableCard key={cardKey(card)} card={card} ctx={dragCtx}>
                           <View style={{ width: colW * 0.86 }}>
-                            <BoardCardView card={card} now={now} all={allCards} onOpen={openDetail} onToggleDone={toggleDone} layout={state.cardLayout?.[card.kind]} />
+                            <BoardCardView card={card} now={now} all={allCards} onOpen={openDetail} onToggleDone={toggleDone} {...cardFace(card)} />
                           </View>
                         </DraggableCard>
                       ))}
@@ -1020,6 +1520,11 @@ export function SmartGenBoardScreen({ goBack }: { goBack: () => void }) {
                     </ScrollView>
                   </View>
                 ))}
+                {laneAxis && (
+                  <View style={{ paddingHorizontal: 12 }}>
+                    <AddLaneGhost onAdd={addLane} />
+                  </View>
+                )}
               </ScrollView>
             )}
 
@@ -1029,7 +1534,7 @@ export function SmartGenBoardScreen({ goBack }: { goBack: () => void }) {
                   <View key={c.key} style={{ gap: 8 }}>
                     <ColumnHeader color={c.color} label={c.label} count={c.cards.length} />
                     {c.cards.map((card) => (
-                      <BoardCardView key={cardKey(card)} card={card} now={now} all={allCards} onOpen={openDetail} onToggleDone={toggleDone} compact layout={state.cardLayout?.[card.kind]} />
+                      <BoardCardView key={cardKey(card)} card={card} now={now} all={allCards} onOpen={openDetail} onToggleDone={toggleDone} compact {...cardFace(card)} />
                     ))}
                   </View>
                 ))}
@@ -1054,7 +1559,7 @@ export function SmartGenBoardScreen({ goBack }: { goBack: () => void }) {
                       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 30, minHeight: 90 }}>
                         {dayCards.map((card) => (
                           <DraggableCard key={cardKey(card)} card={card} ctx={dragCtx}>
-                            <BoardCardView card={card} now={now} all={allCards} onOpen={openDetail} onToggleDone={toggleDone} compact layout={state.cardLayout?.[card.kind]} />
+                            <BoardCardView card={card} now={now} all={allCards} onOpen={openDetail} onToggleDone={toggleDone} compact {...cardFace(card)} />
                           </DraggableCard>
                         ))}
                         {dayCards.length === 0 && <Text style={local.emptyCol}>Drop here</Text>}
@@ -1099,7 +1604,7 @@ export function SmartGenBoardScreen({ goBack }: { goBack: () => void }) {
                   <View style={{ gap: 8 }}>
                     {visible.filter(inCircle).map((card) => (
                       <DraggableCard key={cardKey(card)} card={card} ctx={dragCtx}>
-                        <BoardCardView card={card} now={now} all={allCards} onOpen={openDetail} onToggleDone={toggleDone} compact layout={state.cardLayout?.[card.kind]} />
+                        <BoardCardView card={card} now={now} all={allCards} onOpen={openDetail} onToggleDone={toggleDone} compact {...cardFace(card)} />
                       </DraggableCard>
                     ))}
                     {!visible.some(inCircle) && <Text style={local.emptyCol}>Drop here</Text>}
@@ -1109,7 +1614,7 @@ export function SmartGenBoardScreen({ goBack }: { goBack: () => void }) {
                   <Text style={[local.colTitle, { textAlign: "center", opacity: 0.6 }]}>OUT</Text>
                   {visible.filter((c) => !inCircle(c)).map((card) => (
                     <DraggableCard key={cardKey(card)} card={card} ctx={dragCtx}>
-                      <BoardCardView card={card} now={now} all={allCards} onOpen={openDetail} onToggleDone={toggleDone} compact layout={state.cardLayout?.[card.kind]} />
+                      <BoardCardView card={card} now={now} all={allCards} onOpen={openDetail} onToggleDone={toggleDone} compact {...cardFace(card)} />
                     </DraggableCard>
                   ))}
                 </View>
@@ -1120,10 +1625,8 @@ export function SmartGenBoardScreen({ goBack }: { goBack: () => void }) {
               <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 10, paddingBottom: 40, gap: 8 }}>
                 {calendarSections(visible, now).map((s) => (
                   <View key={s.key} style={{ gap: 8 }}>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 }}>
-                      <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: s.color, shadowColor: s.color, shadowOpacity: 0.8, shadowRadius: 5, shadowOffset: { width: 0, height: 0 } }} />
-                      <Text style={[local.colTitle, { color: s.color }]}>{s.label}</Text>
-                      <Text style={local.colCount}>{s.cards.length}</Text>
+                    <View style={{ marginTop: 8 }}>
+                      <ColumnHeader color={s.color} label={s.label} count={s.cards.length} />
                     </View>
                     {s.cards.map((card) => (
                       <View key={`${card.ref.kind}:${card.ref.id}`}>
@@ -1158,8 +1661,244 @@ export function SmartGenBoardScreen({ goBack }: { goBack: () => void }) {
           onOpenOther={(r) => setDetailRef(r)}
         />
       )}
+      {newCardOpen && (
+        <Modal transparent animationType="fade" onRequestClose={() => setNewCardOpen(false)}>
+          <Pressable style={local.modalBackdrop} onPress={() => setNewCardOpen(false)}>
+            <Pressable style={[local.modalSheet, { maxWidth: 340 }]} onPress={() => {}}>
+              <View style={{ padding: 16, gap: 10 }}>
+                <Text style={local.sectionLabel}>NEW CARD</Text>
+                {ALL_KINDS.map((k) => (
+                  <Pressable key={k} onPress={() => createCard(k)} style={[local.layoutRow, { paddingVertical: 11 }]}>
+                    <Ionicons name={KIND_ICONS[k]} size={15} color={KIND_COLORS[k]} />
+                    <Text style={[local.fieldName, { flex: 1, maxWidth: undefined, textTransform: "capitalize" }]}>{k}</Text>
+                    <Ionicons name="chevron-forward" size={13} color="rgba(238,241,246,0.4)" />
+                  </Pressable>
+                ))}
+              </View>
+            </Pressable>
+          </Pressable>
+        </Modal>
+      )}
       {fieldsManagerOpen && <TypeFieldsManager onClose={() => setFieldsManagerOpen(false)} />}
+      {boardsOpen && <BoardSwitcherModal onClose={() => setBoardsOpen(false)} />}
+      {boardMenuOpen && <BoardMenuModal onClose={() => setBoardMenuOpen(false)} />}
+      {laneEdit && (
+        <LaneEditModal
+          lane={laneEdit}
+          canDelete={laneDeletable(laneEdit.key)}
+          onRename={(next) => renameLane(laneEdit.key, next)}
+          onDelete={() => deleteLane(laneEdit.key)}
+          onClose={() => setLaneEdit(null)}
+        />
+      )}
     </Page>
+  );
+}
+
+// ── Boards — Trello's model: many named boards over one card pool ───────────
+const VIEW_LABELS: Record<string, string> = {
+  canvas: "Canvas", board: "Board", lanes: "Lanes", list: "List", calendar: "Agenda",
+  week: "Week", month: "Month", pages: "Pages", circle: "Circle",
+};
+
+function BoardSwitcherModal({ onClose }: { onClose: () => void }) {
+  const { state, dispatch } = useCollider();
+  const [newName, setNewName] = useState("");
+  const create = () => {
+    const name = newName.trim();
+    if (!name) return;
+    dispatch({ type: "createBoard", id: newId("bd"), name });
+    setNewName("");
+    onClose();
+  };
+  return (
+    <Modal transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={local.modalBackdrop} onPress={onClose}>
+        <Pressable style={[local.modalSheet, { maxWidth: 360 }]} onPress={() => {}}>
+          <ScrollView contentContainerStyle={{ padding: 14, gap: 8 }}>
+            <Text style={local.sectionLabel}>YOUR BOARDS</Text>
+            {state.boards.map((b) => {
+              const active = b.id === state.activeBoardId;
+              return (
+                <Pressable key={b.id} onPress={() => { dispatch({ type: "switchBoard", id: b.id }); onClose(); }} style={[local.boardRow, active && local.boardRowActive]}>
+                  <View style={[local.boardSwatch, { backgroundColor: b.config.background || "rgba(255,255,255,0.08)" }]} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={local.boardRowName} numberOfLines={1}>{b.name}</Text>
+                    <Text style={local.boardRowMeta}>{VIEW_LABELS[b.config.view] || b.config.view}</Text>
+                  </View>
+                  {active && <Ionicons name="checkmark" size={14} color="#a78bfa" />}
+                </Pressable>
+              );
+            })}
+            <View style={{ flexDirection: "row", gap: 6, marginTop: 4 }}>
+              <TextInput
+                value={newName}
+                onChangeText={setNewName}
+                placeholder="New board name"
+                placeholderTextColor="rgba(255,255,255,0.3)"
+                style={local.fieldInput}
+                onSubmitEditing={create}
+              />
+              <Pressable onPress={create} style={[local.quickChip, { justifyContent: "center" }]}>
+                <Text style={local.quickChipText}>Create</Text>
+              </Pressable>
+            </View>
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+// Deep tints, not Trello's flat brights — this app's rule is that color is
+// light and diffused, and the board's ground sits behind pale paper cards.
+const BOARD_BACKGROUNDS: { label: string; value: string }[] = [
+  { label: "Wallpaper", value: "" },
+  { label: "Ocean", value: "#0c2233" },
+  { label: "Forest", value: "#10281b" },
+  { label: "Plum", value: "#221833" },
+  { label: "Ember", value: "#2e1a12" },
+  { label: "Rose", value: "#2c1420" },
+  { label: "Slate", value: "#14171c" },
+];
+
+function BoardMenuModal({ onClose }: { onClose: () => void }) {
+  const { state, dispatch } = useCollider();
+  const { toast } = useToast();
+  const active = state.boards.find((b) => b.id === state.activeBoardId);
+  const [name, setName] = useState(active?.name || "");
+  // Deleting a board is the one destructive act here — it takes two taps.
+  const [armDelete, setArmDelete] = useState(false);
+  if (!active) return null;
+  const commitName = () => {
+    if (name.trim() && name.trim() !== active.name) dispatch({ type: "renameBoard", id: active.id, name });
+  };
+  const close = () => { commitName(); onClose(); };
+  return (
+    <Modal transparent animationType="fade" onRequestClose={close}>
+      <Pressable style={local.modalBackdrop} onPress={close}>
+        <Pressable style={[local.modalSheet, { maxWidth: 360 }]} onPress={() => {}}>
+          <View style={{ padding: 14, gap: 12 }}>
+            <Text style={local.sectionLabel}>BOARD NAME</Text>
+            <TextInput
+              value={name}
+              onChangeText={setName}
+              onBlur={commitName}
+              onSubmitEditing={commitName}
+              style={local.modalTitleInput}
+              placeholder="Board name"
+              placeholderTextColor="rgba(255,255,255,0.3)"
+            />
+            <Text style={local.sectionLabel}>BACKGROUND</Text>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              {BOARD_BACKGROUNDS.map((bg) => {
+                const selected = (state.smartBoard.background || "") === bg.value;
+                return (
+                  <Pressable
+                    key={bg.label}
+                    onPress={() => dispatch({ type: "setBoardConfig", config: { background: bg.value || undefined } })}
+                    style={[local.bgSwatch, bg.value ? { backgroundColor: bg.value } : local.bgSwatchNone, selected && local.bgSwatchSelected]}
+                  >
+                    {!bg.value && <Ionicons name="image-outline" size={13} color="rgba(238,241,246,0.6)" />}
+                    {selected && !!bg.value && <Ionicons name="checkmark" size={13} color="#fff" />}
+                  </Pressable>
+                );
+              })}
+            </View>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              <Pressable
+                onPress={() => { commitName(); dispatch({ type: "duplicateBoard", id: active.id, newId: newId("bd") }); onClose(); toast("Board duplicated"); }}
+                style={local.quickChip}
+              >
+                <Text style={local.quickChipText}>Duplicate board</Text>
+              </Pressable>
+              {state.boards.length > 1 && (
+                <Pressable
+                  onPress={() => {
+                    if (!armDelete) { setArmDelete(true); return; }
+                    dispatch({ type: "deleteBoard", id: active.id });
+                    onClose();
+                    toast("Board deleted");
+                  }}
+                  style={[local.quickChip, armDelete && { borderColor: "rgba(248,113,113,0.6)", backgroundColor: "rgba(248,113,113,0.12)" }]}
+                >
+                  <Text style={[local.quickChipText, armDelete && { color: "#f87171" }]}>{armDelete ? "Tap again to delete" : "Delete board"}</Text>
+                </Pressable>
+              )}
+            </View>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+// Tap a lane's title to rename it — the Trello gesture. Deleting is offered
+// only for an empty option-backed lane; a lane with cards is their value.
+function LaneEditModal({ lane, canDelete, onRename, onDelete, onClose }: {
+  lane: { key: string; label: string };
+  canDelete: boolean;
+  onRename: (next: string) => void;
+  onDelete: () => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(lane.label);
+  const commit = () => { onRename(name); onClose(); };
+  return (
+    <Modal transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={local.modalBackdrop} onPress={onClose}>
+        <Pressable style={[local.modalSheet, { maxWidth: 320 }]} onPress={() => {}}>
+          <View style={{ padding: 14, gap: 10 }}>
+            <Text style={local.sectionLabel}>LANE</Text>
+            <TextInput value={name} onChangeText={setName} autoFocus style={local.modalTitleInput} onSubmitEditing={commit} />
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              <Pressable onPress={commit} style={local.quickChip}><Text style={local.quickChipText}>Rename</Text></Pressable>
+              {canDelete && (
+                <Pressable onPress={() => { onDelete(); onClose(); }} style={local.quickChip}>
+                  <Text style={[local.quickChipText, { color: "#f87171" }]}>Delete lane</Text>
+                </Pressable>
+              )}
+              <Pressable onPress={onClose} style={local.quickChip}><Text style={local.quickChipText}>Cancel</Text></Pressable>
+            </View>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+// Trello's "+ Add another list", as an inline composer at the end of the
+// lanes — a ghost column that becomes an input when tapped.
+function AddLaneGhost({ width, onAdd }: { width?: number; onAdd: (name: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const commit = () => { onAdd(text); setText(""); setOpen(false); };
+  if (!open) {
+    return (
+      <Pressable onPress={() => setOpen(true)} style={[local.addLaneBtn, width ? { width } : null]}>
+        <Ionicons name="add" size={14} color="rgba(238,241,246,0.6)" />
+        <Text style={local.addLaneText}>Add lane</Text>
+      </Pressable>
+    );
+  }
+  return (
+    <View style={[local.addLaneForm, width ? { width } : null]}>
+      <TextInput
+        value={text}
+        onChangeText={setText}
+        placeholder="Lane name"
+        placeholderTextColor="rgba(255,255,255,0.3)"
+        // flex:1 is for row layouts; in this column form it would collapse
+        // the input to zero height.
+        style={[local.fieldInput, { flex: 0 }]}
+        autoFocus
+        onSubmitEditing={commit}
+      />
+      <View style={{ flexDirection: "row", gap: 6 }}>
+        <Pressable onPress={commit} style={local.quickChip}><Text style={local.quickChipText}>Add</Text></Pressable>
+        <Pressable onPress={() => { setText(""); setOpen(false); }} style={local.quickChip}><Text style={local.quickChipText}>Cancel</Text></Pressable>
+      </View>
+    </View>
   );
 }
 
@@ -1192,6 +1931,7 @@ function BoardChat({ allCards, openDetail }: { allCards: BoardCard[]; openDetail
       const raw = await smartGenChat(history as any, prompt, briefs, {
         webSearch: useWeb,
         fieldDefs: getState().fieldDefs,
+        boards: getState().boards.map((b) => ({ name: b.name, active: b.id === getState().activeBoardId, view: b.config.view })),
         onToken: (partial) => {
           // Hide a half-received action block while streaming; it renders as
           // an "applied" chip once complete, never as raw JSON.
@@ -1297,6 +2037,9 @@ function CardDetailModal({ cardRef, allCards, now, onClose, onOpenOther }: {
   const [newFieldName, setNewFieldName] = useState("");
   const [newFieldType, setNewFieldType] = useState<FieldType>("text");
   const [originPreview, setOriginPreview] = useState<CardOrigin | null>(null);
+  const [newRow, setNewRow] = useState("");
+  const [rowQuery, setRowQuery] = useState("");
+  const [rowPage, setRowPage] = useState(0);
   if (!item || !card) return null;
 
   const color = KIND_COLORS[cardRef.kind];
@@ -1331,6 +2074,18 @@ function CardDetailModal({ cardRef, allCards, now, onClose, onOpenOther }: {
   ];
   const media: CardMedia[] = item?.media || [];
   const addMedia = (m: CardMedia) => dispatch({ type: "setCardMedia", ref: cardRef, media: [...media, m] });
+  // Face and rows — the notebook side of the editor. Template is per card,
+  // falling back to the type default exactly like layout does.
+  const template: CardTemplate = item?.template || state.cardTemplates?.[cardRef.kind] || "card";
+  const setTemplate = (t: CardTemplate) => dispatch({ type: "setCardTemplate", ref: cardRef, template: t });
+  const rows: string[] = item?.rows || [];
+  const setRows = (next: string[]) => dispatch({ type: "setCardRows", ref: cardRef, rows: next });
+  const matchedRows = rowQuery.trim()
+    ? rows.map((r, i) => ({ r, i })).filter(({ r }) => r.toLowerCase().includes(rowQuery.trim().toLowerCase()))
+    : rows.map((r, i) => ({ r, i }));
+  const rowPageCount = Math.max(1, Math.ceil(matchedRows.length / NOTEBOOK_PAGE_SIZE));
+  const rowPageSafe = Math.min(rowPage, rowPageCount - 1);
+  const pagedRows = matchedRows.slice(rowPageSafe * NOTEBOOK_PAGE_SIZE, rowPageSafe * NOTEBOOK_PAGE_SIZE + NOTEBOOK_PAGE_SIZE);
   const setField = (k: string, v: string) => {
     dispatch({ type: "setCardFields", ref: cardRef, fields: { ...(item.customFields || {}), [k]: v } });
   };
@@ -1377,7 +2132,7 @@ function CardDetailModal({ cardRef, allCards, now, onClose, onOpenOther }: {
               <TextInput value={title} onChangeText={(t) => { setTitle(t); saveText(t, body); }} style={local.modalTitleInput} placeholder="Title" placeholderTextColor="rgba(255,255,255,0.3)" multiline />
             )}
             {(cardRef.kind === "memory" || cardRef.kind === "artifact") && (
-              <TextInput value={body} onChangeText={(t) => { setBody(t); saveText(title, t); }} style={local.modalBodyInput} placeholder={cardRef.kind === "memory" ? "Memory content" : "Artifact content"} placeholderTextColor="rgba(255,255,255,0.3)" multiline />
+              <TextInput value={body} onChangeText={(t) => { setBody(t); saveText(title, t); }} style={local.modalBodyInput} placeholder={cardRef.kind === "memory" ? (template === "notebook" ? "Notebook header — what these entries are about" : "Memory content") : "Artifact content"} placeholderTextColor="rgba(255,255,255,0.3)" multiline />
             )}
 
             {/* Reminder-specific: urgency, deadline, recurrence. Urgent is a
@@ -1410,7 +2165,7 @@ function CardDetailModal({ cardRef, allCards, now, onClose, onOpenOther }: {
                   </Pressable>
                   {collapsePriority(item.priority) === "high" && item.due != null && (
                     <Pressable onPress={() => setField(HIDE_COUNTDOWN_FIELD, item.customFields?.[HIDE_COUNTDOWN_FIELD] === CHECKED ? "" : CHECKED)} style={local.quickChip}>
-                      <Text style={local.quickChipText}>{item.customFields?.[HIDE_COUNTDOWN_FIELD] === CHECKED ? "Show countdown" : "Hide countdown"}</Text>
+                      <Text style={local.quickChipText}>{item.customFields?.[HIDE_COUNTDOWN_FIELD] === CHECKED ? "Show timer" : "Hide timer"}</Text>
                     </Pressable>
                   )}
                 </View>
@@ -1510,6 +2265,104 @@ function CardDetailModal({ cardRef, allCards, now, onClose, onOpenOther }: {
               </View>
             )}
 
+            {/* Face — which template the card wears. A card is a stack of
+                fields; a notebook is a header over rows of plain text, paged
+                and searchable. Both use the same fields and the same layout
+                list; only the reading changes. */}
+            <View style={{ flexDirection: "row", alignItems: "center" }}>
+              <Text style={local.sectionLabel}>FACE</Text>
+              <View style={{ flex: 1 }} />
+              <Pressable
+                onPress={() => { dispatch({ type: "setTypeTemplate", kind: cardRef.kind, template }); toast(`All ${KIND_PLURAL[cardRef.kind]} use the ${template} face`); }}
+                style={local.quickChip}
+              >
+                <Text style={local.quickChipText}>Apply to all {KIND_PLURAL[cardRef.kind]}</Text>
+              </Pressable>
+            </View>
+            <View style={{ flexDirection: "row", gap: 6 }}>
+              {(["card", "notebook"] as CardTemplate[]).map((t) => (
+                <Pressable
+                  key={t}
+                  onPress={() => setTemplate(t)}
+                  style={[local.quickChip, { flexDirection: "row", alignItems: "center", gap: 5 }, template === t && { backgroundColor: `${color}18`, borderColor: `${color}55` }]}
+                >
+                  <Ionicons name={t === "notebook" ? "book-outline" : "square-outline"} size={12} color={template === t ? color : "rgba(238,241,246,0.5)"} />
+                  <Text style={[local.quickChipText, template === t && { color }]}>{t}</Text>
+                </Pressable>
+              ))}
+            </View>
+
+            {/* Entries — the notebook's rows. Plain strings under one header:
+                one card holds a whole journal instead of a card per line, and
+                retrieval is paging and searching, not scrolling. */}
+            {(template === "notebook" || rows.length > 0) && (
+              <>
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                  <Text style={local.sectionLabel}>ENTRIES</Text>
+                  <View style={{ flex: 1 }} />
+                  <Text style={local.typeChipText}>{rows.length}</Text>
+                </View>
+                {rows.length > NOTEBOOK_PAGE_SIZE && (
+                  <View style={local.searchContainer}>
+                    <Ionicons name="search" size={13} color="rgba(255,255,255,0.4)" style={{ marginRight: 7 }} />
+                    <TextInput
+                      value={rowQuery}
+                      onChangeText={(t) => { setRowQuery(t); setRowPage(0); }}
+                      placeholder="Search entries..."
+                      placeholderTextColor="rgba(255,255,255,0.3)"
+                      style={local.searchInput}
+                      autoCapitalize="none"
+                    />
+                  </View>
+                )}
+                <View style={{ gap: 4 }}>
+                  {pagedRows.map(({ r, i }) => (
+                    <View key={i} style={local.layoutRow}>
+                      <Text style={local.notebookRowNumDark}>{i + 1}</Text>
+                      <TextInput
+                        defaultValue={r}
+                        multiline
+                        onEndEditing={(e) => {
+                          const v = e.nativeEvent.text.trim();
+                          const next = [...rows];
+                          if (v) next[i] = v; else next.splice(i, 1);
+                          setRows(next);
+                        }}
+                        style={[local.fieldInput, { flex: 1 }]}
+                      />
+                      <Pressable onPress={() => setRows(rows.filter((_, j) => j !== i))} hitSlop={6}>
+                        <Ionicons name="close-circle-outline" size={15} color="rgba(255,255,255,0.35)" />
+                      </Pressable>
+                    </View>
+                  ))}
+                  {rowPageCount > 1 && (
+                    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 14, paddingTop: 4 }}>
+                      <Pressable onPress={() => setRowPage(Math.max(0, rowPageSafe - 1))} disabled={rowPageSafe === 0} hitSlop={8} style={rowPageSafe === 0 ? { opacity: 0.3 } : undefined}>
+                        <Ionicons name="chevron-back" size={15} color="rgba(238,241,246,0.8)" />
+                      </Pressable>
+                      <Text style={local.colCount}>{rowPageSafe + 1} / {rowPageCount}</Text>
+                      <Pressable onPress={() => setRowPage(Math.min(rowPageCount - 1, rowPageSafe + 1))} disabled={rowPageSafe >= rowPageCount - 1} hitSlop={8} style={rowPageSafe >= rowPageCount - 1 ? { opacity: 0.3 } : undefined}>
+                        <Ionicons name="chevron-forward" size={15} color="rgba(238,241,246,0.8)" />
+                      </Pressable>
+                    </View>
+                  )}
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <TextInput
+                      value={newRow}
+                      onChangeText={setNewRow}
+                      placeholder="Add an entry..."
+                      placeholderTextColor="rgba(255,255,255,0.25)"
+                      style={[local.fieldInput, { flex: 1 }]}
+                      onSubmitEditing={() => { const v = newRow.trim(); if (v) { setRows([...rows, v]); setNewRow(""); } }}
+                    />
+                    <Pressable onPress={() => { const v = newRow.trim(); if (v) { setRows([...rows, v]); setNewRow(""); } }} style={local.iconBtn}>
+                      <Ionicons name="add" size={15} color="rgba(238,241,246,0.7)" />
+                    </Pressable>
+                  </View>
+                </View>
+              </>
+            )}
+
             {/* Card layout — every element on the face, in order, movable and
                 removable. Photos are a field like any other, so they sit
                 wherever the user puts them. Changes apply to this card; the
@@ -1524,10 +2377,10 @@ function CardDetailModal({ cardRef, allCards, now, onClose, onOpenOther }: {
                 </Pressable>
               )}
               <Pressable
-                onPress={() => { dispatch({ type: "setCardLayout", kind: cardRef.kind, layout }); toast(`Applied to all ${cardRef.kind} cards`); }}
+                onPress={() => { dispatch({ type: "setCardLayout", kind: cardRef.kind, layout }); toast(`Applied to all ${KIND_PLURAL[cardRef.kind]}`); }}
                 style={local.quickChip}
               >
-                <Text style={local.quickChipText}>Apply to all {cardRef.kind}s</Text>
+                <Text style={local.quickChipText}>Apply to all {KIND_PLURAL[cardRef.kind]}</Text>
               </Pressable>
             </View>
             <View style={{ gap: 4 }}>
@@ -1688,6 +2541,33 @@ function CardDetailModal({ cardRef, allCards, now, onClose, onOpenOther }: {
               ))}
             </View>
 
+            {/* Publishing existed only for media generations, buried in the
+                Generations drawer — an artifact the user made had no way out
+                of the app at all. The Market's kinds are media, so a document
+                publishes as its content under the "coding" kind, which is the
+                one the Market treats as text. */}
+            {cardRef.kind === "artifact" && (
+              <Pressable
+                onPress={() => {
+                  dispatch({
+                    type: "publishToMarket",
+                    item: {
+                      kind: "coding",
+                      prompt: `${item.title}\n\n${(item.content || "").slice(0, 400)}`,
+                      model: item.modelId || "global",
+                      author: state.auth.kind === "guest" ? "@guest" : `@${(state.auth as any).email.split("@")[0]}`,
+                      url: "",
+                    },
+                  });
+                  toast("Published to Discover Market");
+                }}
+                style={[local.quickChip, { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 5, marginTop: 4 }]}
+              >
+                <Ionicons name="share-outline" size={12} color="rgba(238,241,246,0.75)" />
+                <Text style={local.quickChipText}>Publish to Market</Text>
+              </Pressable>
+            )}
+
             <Pressable onPress={remove} style={[local.quickChip, { alignSelf: "flex-start", borderColor: "rgba(248,113,113,0.4)", marginTop: 4 }]}>
               <Text style={[local.quickChipText, { color: "#f87171" }]}>Delete card</Text>
             </Pressable>
@@ -1714,8 +2594,9 @@ function CardDetailModal({ cardRef, allCards, now, onClose, onOpenOther }: {
 // Field keys are shown to the user, so the built-ins get plain names rather
 // than their internal identifiers.
 const FIELD_LABELS: Record<string, string> = {
-  title: "Title & done", countdown: "Countdown", recurring: "Repeats", status: "Status",
+  title: "Title & done", countdown: "Timer", recurring: "Repeats", status: "Status",
   tags: "Tags", media: "Photos & files", body: "Description", embeds: "Embedded cards", origin: "Origin",
+  rows: "Entries (notebook)", search: "Search bar",
 };
 function fieldLabel(key: string): string {
   return FIELD_LABELS[key] || key;
@@ -1983,6 +2864,20 @@ function TypeFieldsManager({ onClose }: { onClose: () => void }) {
 }
 
 const local = StyleSheet.create(withFont({
+  boardBar: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, marginTop: 8 },
+  boardNameBtn: { flex: 1, flexDirection: "row", alignItems: "center", gap: 6, height: 34, paddingHorizontal: 11, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.07)" },
+  boardName: { flexShrink: 1, color: "rgba(238,241,246,0.9)", fontSize: 12.5, fontWeight: "800", fontFamily: fontFamilyForWeight(800), letterSpacing: 0.2 },
+  boardRow: { flexDirection: "row", alignItems: "center", gap: 9, paddingVertical: 8, paddingHorizontal: 9, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.03)", borderWidth: 1, borderColor: "transparent" },
+  boardRowActive: { backgroundColor: "rgba(167,139,250,0.1)", borderColor: "rgba(167,139,250,0.35)" },
+  boardRowName: { color: "rgba(238,241,246,0.9)", fontSize: 12, fontWeight: "700", fontFamily: fontFamilyForWeight(700) },
+  boardRowMeta: { color: "rgba(238,241,246,0.4)", fontSize: 9.5, fontWeight: "700", fontFamily: fontFamilyForWeight(700), marginTop: 1 },
+  boardSwatch: { width: 26, height: 20, borderRadius: 5, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)" },
+  bgSwatch: { width: 40, height: 30, borderRadius: 8, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", alignItems: "center", justifyContent: "center" },
+  bgSwatchNone: { backgroundColor: "rgba(255,255,255,0.04)", borderStyle: "dashed" },
+  bgSwatchSelected: { borderColor: "rgba(167,139,250,0.8)", borderWidth: 1.5 },
+  addLaneBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, height: 38, borderRadius: 10, borderWidth: 1, borderStyle: "dashed", borderColor: "rgba(255,255,255,0.18)", backgroundColor: "rgba(255,255,255,0.03)" },
+  addLaneText: { color: "rgba(238,241,246,0.6)", fontSize: 11, fontWeight: "800", fontFamily: fontFamilyForWeight(800) },
+  addLaneForm: { gap: 6, padding: 8, borderRadius: 10, borderWidth: 1, borderColor: "rgba(255,255,255,0.12)", backgroundColor: "rgba(255,255,255,0.04)", alignSelf: "flex-start", minWidth: 180 },
   switcherRow: { flexDirection: "row", gap: 6, paddingHorizontal: 12, marginTop: 8 },
   switcherBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5, paddingVertical: 8, borderRadius: 10, backgroundColor: "rgba(255,255,255,0.04)", borderWidth: 1, borderColor: "transparent" },
   switcherBtnActive: { backgroundColor: "rgba(167,139,250,0.14)", borderColor: "rgba(167,139,250,0.4)" },
@@ -2010,9 +2905,29 @@ const local = StyleSheet.create(withFont({
     shadowOffset: { width: 0, height: 3 },
     elevation: 3,
   },
-  cardAccent: { width: 3.5 },
+  // The notebook face: same paper, squarer corners, so it reads as a page in
+  // a book rather than a loose card.
+  notebookCard: { borderRadius: 8 },
+  cardActions: { flexDirection: "row", gap: 10, marginTop: 2, paddingTop: 6, borderTopWidth: 1, borderTopColor: "rgba(22,22,26,0.08)" },
+  cardActionBtn: { flexDirection: "row", alignItems: "center", gap: 3 },
+  cardActionText: { color: "rgba(22,22,26,0.45)", fontSize: 9.5, fontWeight: "800", fontFamily: fontFamilyForWeight(800), letterSpacing: 0.3 },
+  notebookHeader: { fontSize: 14, fontWeight: "900", fontFamily: fontFamilyForWeight(900), letterSpacing: 0.2 },
+  headerRule: { height: 1, marginTop: 1 },
+  rowSearch: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: "rgba(22,22,26,0.05)", borderRadius: 7, paddingHorizontal: 7, height: 26 },
+  rowSearchInput: { flex: 1, color: "#16161a", fontSize: 11, height: "100%", padding: 0 },
+  // Ruled rows: a journal's line, not a table's border.
+  notebookRow: { flexDirection: "row", alignItems: "flex-start", gap: 7, paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: "rgba(22,22,26,0.07)" },
+  notebookRowNumDark: { color: "rgba(238,241,246,0.35)", fontSize: 9.5, fontWeight: "800", fontFamily: fontFamilyForWeight(800), fontVariant: ["tabular-nums"], minWidth: 16 },
+  notebookRowNum: { color: "rgba(22,22,26,0.3)", fontSize: 9, fontWeight: "800", fontFamily: fontFamilyForWeight(800), fontVariant: ["tabular-nums"], marginTop: 1.5, minWidth: 12 },
+  notebookRowText: { flex: 1, color: "rgba(22,22,26,0.82)", fontSize: 11.5, lineHeight: 16 },
+  notebookEmpty: { color: "rgba(22,22,26,0.4)", fontSize: 11, paddingVertical: 8 },
+  pagerRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 12, paddingTop: 7 },
+  pagerText: { fontSize: 9.5, fontWeight: "800", fontFamily: fontFamilyForWeight(800), fontVariant: ["tabular-nums"] },
   cardTitle: { flex: 1, color: "#16161a", fontSize: 13, fontWeight: "700", fontFamily: fontFamilyForWeight(700), lineHeight: 17 },
   cardBody: { color: "rgba(22,22,26,0.62)", fontSize: 11.5, lineHeight: 16 },
+  // Selection reads as a ring on the card itself, not a checkbox bolted on:
+  // in select mode the whole card is the target.
+  cardSelected: { borderWidth: 2, borderColor: "#a78bfa" },
   cardDragging: { shadowOpacity: 0.5, shadowRadius: 16, shadowOffset: { width: 0, height: 10 }, elevation: 12 },
   urgentWord: { color: "rgba(22,22,26,0.55)", fontSize: 8.5, fontWeight: "800", fontFamily: fontFamilyForWeight(800), marginTop: 3, letterSpacing: 0.7 },
   criticalWord: { color: "rgba(47,109,158,0.85)", fontSize: 8.5, fontWeight: "800", fontFamily: fontFamilyForWeight(800), marginTop: 3, letterSpacing: 0.7 },
@@ -2038,6 +2953,8 @@ const local = StyleSheet.create(withFont({
   sectionLabel: { color: "rgba(238,241,246,0.45)", fontSize: 9.5, fontWeight: "900", fontFamily: fontFamilyForWeight(900), letterSpacing: 1 },
   fieldName: { color: "rgba(238,241,246,0.7)", fontSize: 11, fontWeight: "700", fontFamily: fontFamilyForWeight(700), maxWidth: 110 },
   fieldInput: { flex: 1, color: "#fff", fontSize: 11.5, backgroundColor: "rgba(255,255,255,0.04)", borderRadius: 9, borderWidth: 1, borderColor: "rgba(255,255,255,0.07)", paddingHorizontal: 9, paddingVertical: 6 },
+  selectBar: { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 14, paddingVertical: 9, marginHorizontal: 12, marginTop: 6, borderRadius: 11, backgroundColor: "rgba(167,139,250,0.12)", borderWidth: 1, borderColor: "rgba(167,139,250,0.3)" },
+  selectBarText: { color: "rgba(238,241,246,0.9)", fontSize: 11.5, fontWeight: "700", fontFamily: fontFamilyForWeight(700) },
   quickChip: { paddingHorizontal: 9, paddingVertical: 6, borderRadius: 9, backgroundColor: "rgba(255,255,255,0.04)", borderWidth: 1, borderColor: "rgba(255,255,255,0.12)" },
   circleIn: { borderWidth: 1.5, borderColor: "rgba(167,139,250,0.4)", borderRadius: 999, paddingVertical: 22, paddingHorizontal: 14, backgroundColor: "rgba(167,139,250,0.05)", minHeight: 150, justifyContent: "center" },
   monthCell: { minHeight: 62, borderRadius: 7, borderWidth: 1, borderColor: "rgba(255,255,255,0.06)", backgroundColor: "rgba(255,255,255,0.02)", padding: 3, gap: 2 },

@@ -29,15 +29,21 @@ function BackButton({ onPress }: { onPress: () => void }) {
 export function Page({ title, goBack, children, noScroll }: { title: string; goBack: () => void; children?: ReactNode; noScroll?: boolean }) {
   const insets = useSafeAreaInsets();
   return (
-    <View style={[styles.flex, { backgroundColor: "rgba(4, 4, 4, 0.45)" }]}>
+    // Every screen shows the app's own wallpaper straight through: no scrim.
+    // This used to sit under a 45% black wash, which meant the background the
+    // user chose was only ever fully visible on the home screen.
+    <View style={styles.flex}>
       <View style={[styles.header, { paddingTop: insets.top, height: 56 + insets.top, overflow: "hidden" }]}>
         <GlossSurface />
         <BackButton onPress={goBack} />
         <Text style={styles.pageTitle}>{title}</Text>
         <View style={{ width: 40 }} />
       </View>
+      {/* The header dissolves into the content instead of ending on a line;
+          it fades from the header's own glass to nothing, not from black —
+          a black fade was a tint in its own right. */}
       <LinearGradient
-        colors={["#040404", "rgba(4,4,4,0)"]}
+        colors={["rgba(4,4,4,0.55)", "rgba(4,4,4,0)"]}
         style={{ height: 10, marginTop: -1 }}
         pointerEvents="none"
       />

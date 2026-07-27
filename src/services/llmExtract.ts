@@ -6,7 +6,6 @@
 // On any failure — network, rate limit, malformed JSON — it silently
 // resolves to an empty batch. Nothing in the UI ever waits on it.
 import type { Artifact, Memory, Project, Reminder } from "../state";
-import { callGroq } from "./chat";
 import { callMiniMax } from "./minimax";
 import { fingerprint } from "./smartgen";
 
@@ -15,7 +14,11 @@ type Priority = "high" | "none";
 type Progress = "todo" | "inprogress" | "done";
 type ArtifactKind = Artifact["kind"];
 
-export type LLMMemory = { content: string; tags: string[]; projectId?: string; priority: Priority; fingerprint: string };
+// `notebook` is the subject header the memory belongs under. Memories are the
+// model's own journal, so they are stored as rows under a header rather than
+// as one card per line — a card per remembered fact buries the board and
+// tells the model nothing a row wouldn't.
+export type LLMMemory = { content: string; tags: string[]; projectId?: string; priority: Priority; fingerprint: string; notebook: string };
 export type LLMReminder = {
   title: string; due?: number; priority: Priority; projectId?: string;
   progress: Progress; tags: string[]; fingerprint: string; isTask: boolean;
@@ -63,6 +66,9 @@ export async function smartGenLLM(
   try {
     const existingArtifactTitles = context.artifacts.map((a) => a.title).slice(0, 30).join(", ") || "none";
     const existingMemorySnippets = context.memories.slice(0, 15).map((m) => `- ${m.content.slice(0, 80)}`).join("\n") || "none";
+    // Existing notebook headers, so a new fact lands in the journal it belongs
+    // to instead of starting a fresh one for the same subject.
+    const existingHeaders = Array.from(new Set(context.memories.map((m) => m.content.split("\n")[0].trim()).filter(Boolean))).slice(0, 20);
     const activeProject = context.activeProjectId ? context.projects.find((p) => p.id === context.activeProjectId) : undefined;
 
     const sourceRules = context.source === "assistant"
@@ -86,8 +92,11 @@ export async function smartGenLLM(
       `Existing projects and what each is actually about:\n${projectBriefs(context.projects, context.memories, context.reminders)}`,
       `Existing artifact titles (avoid near-duplicates of these): ${existingArtifactTitles}`,
       `Recent memories already captured (do not repeat these verbatim):\n${existingMemorySnippets}`,
+      "MEMORIES ARE FOR YOU, NOT THE USER. A memory exists so a future model turn serves this person better — a preference, a constraint, a standing fact, how they want to be spoken to. Anything the USER needs to act on is a reminder, never a memory.",
+      `Every memory carries a "notebook": a short subject header it is filed under. Reuse one of these existing headers whenever it fits — only invent a header when none of them covers the subject: ${existingHeaders.length ? existingHeaders.map((h) => `"${h}"`).join(", ") : "none yet"}.`,
+      'A memory\'s "content" is ONE self-contained line under that header — already-parsed meaning, no conversation references, no timestamps.',
       "Respond with STRICT JSON only — no markdown, no code fences, no commentary — matching exactly this shape:",
-      '{"memories":[{"content":"...","tags":["..."],"priority":"none|high","projectName":"optional, exact existing name or omit"}],',
+      '{"memories":[{"content":"...","notebook":"subject header","tags":["..."],"priority":"none|high","projectName":"optional, exact existing name or omit"}],',
       '"reminders":[{"title":"...","due":"YYYY-MM-DD or null","priority":"none|high","isTask":false,"projectName":"optional","isFollowUp":false}],',
       '"projects":[{"name":"..."}],',
       '"artifacts":[{"title":"...","content":"...","kind":"timeline|statement|document|custom","projectName":"optional"}]}',
@@ -103,12 +112,11 @@ export async function smartGenLLM(
     // (scripts/validate-logic-chain.mjs), so every Smart Gen judgment comes
     // from the same qualified judge. Groq llama stays as the fallback so a
     // MiniMax rate-limit never silently costs the user a capture.
-    let raw: string;
-    try {
-      raw = await callMiniMax(messages, { temperature: 0.3 });
-    } catch {
-      raw = await callGroq("llama-3.3-70b-versatile", messages);
-    }
+    // MiniMax only — the one model whose chain was tested. Extraction is a
+    // judgment, and an untested model making it would launder its reasoning
+    // into the board under the tested one's name. On failure this returns an
+    // empty batch, which costs a capture; a wrong capture costs trust.
+    const raw = await callMiniMax(messages, { temperature: 0.3 });
     const cleaned = raw.replace(/```json/gi, "").replace(/```/g, "").trim();
     const parsed = JSON.parse(cleaned);
     if (!parsed || typeof parsed !== "object") return EMPTY_BATCH;
@@ -139,7 +147,10 @@ export async function smartGenLLM(
       if (!content || content.length < 4 || content.length > 400) continue;
       const priority: Priority = m?.priority === "high" ? "high" : "none";
       const tags: string[] = Array.isArray(m?.tags) ? m.tags.filter((t: any) => typeof t === "string").slice(0, 6) : [];
-      batch.memories.push({ content, tags, priority, projectId: resolveProjectId(m?.projectName), fingerprint: fingerprint("memory", content) });
+      // A model that skips the header still gets its row filed somewhere
+      // sensible rather than minting a card of its own.
+      const notebook = (typeof m?.notebook === "string" && m.notebook.trim().slice(0, 60)) || "Notes on this user";
+      batch.memories.push({ content, tags, priority, notebook, projectId: resolveProjectId(m?.projectName), fingerprint: fingerprint("memory", content) });
     }
 
     for (const r of Array.isArray(parsed.reminders) ? parsed.reminders : []) {

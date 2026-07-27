@@ -49,7 +49,17 @@ export type CardOrigin = { convId: string; title: string; ts: number };
 // Anything visual or referential that belongs ON the card rather than beside
 // it: a photo, a clip, a document. Same bag for every card type.
 export type CardMedia = { kind: "image" | "video" | "doc"; url: string; name?: string };
-export type Memory = { id: string; modelId: string; content: string; ts: number; tags?: string[]; projectId?: string; priority?: Priority; fingerprint?: string; links?: SmartLinks; embeds?: CardEmbed[]; customFields?: Record<string, string>; origin?: CardOrigin; media?: CardMedia[]; layout?: string[] };
+// How a card renders. "card" is the object face — a stack of fields. "notebook"
+// is the page face — a header and rows of plain strings, paged rather than
+// scrolled, with its own search. A notebook is the right shape whenever the
+// content is already parsed and only needs retrieval: a memory journal, a
+// packing list, a lore book. Same card, same fields, different reading.
+export type CardTemplate = "card" | "notebook";
+// A notebook's rows. Deliberately plain strings: they are already-extracted
+// meaning, not records to re-parse, and the header above them is what groups
+// them. Every card kind carries them so any card can be read as a notebook.
+export type CardRow = string;
+export type Memory = { id: string; modelId: string; content: string; ts: number; tags?: string[]; projectId?: string; priority?: Priority; fingerprint?: string; links?: SmartLinks; embeds?: CardEmbed[]; customFields?: Record<string, string>; origin?: CardOrigin; media?: CardMedia[]; layout?: string[]; rows?: CardRow[]; template?: CardTemplate };
 export type Reminder = {
   id: string;
   title: string;
@@ -79,8 +89,10 @@ export type Reminder = {
   origin?: CardOrigin;
   media?: CardMedia[];
   layout?: string[];
+  rows?: CardRow[];
+  template?: CardTemplate;
 };
-export type Project = { id: string; name: string; tasks: { id: string; title: string; done: boolean; priority?: Priority }[]; fingerprint?: string; modelId?: string; links?: SmartLinks; embeds?: CardEmbed[]; customFields?: Record<string, string>; origin?: CardOrigin; media?: CardMedia[]; layout?: string[] };
+export type Project = { id: string; name: string; tasks: { id: string; title: string; done: boolean; priority?: Priority }[]; fingerprint?: string; modelId?: string; links?: SmartLinks; embeds?: CardEmbed[]; customFields?: Record<string, string>; origin?: CardOrigin; media?: CardMedia[]; layout?: string[]; rows?: CardRow[]; template?: CardTemplate };
 export type Artifact = {
   id: string;
   title: string;
@@ -96,6 +108,8 @@ export type Artifact = {
   origin?: CardOrigin;
   media?: CardMedia[];
   layout?: string[];
+  rows?: CardRow[];
+  template?: CardTemplate;
 };
 export type ColliderFile = { id: string; name: string; kind: "uploaded" | "generated"; url: string; ts: number; modelId?: string };
 export type GenerationItem = {
@@ -121,7 +135,7 @@ export type ChatMode = "default" | "research" | "deep";
 // a paged sequence (storyboard / photobook / lore book / journal — one
 // primitive, different content), or an inside/outside circle. All of them
 // render the same cards through the same grouping engine.
-export type BoardView = "board" | "lanes" | "list" | "calendar" | "week" | "month" | "pages" | "circle";
+export type BoardView = "canvas" | "board" | "lanes" | "list" | "calendar" | "week" | "month" | "pages" | "circle";
 // "field:<Name>" groups by any typed custom attribute — that IS a swimlane
 // view: a select field's options are the prescriptive lanes, values observed
 // on cards extend them deductively, and renaming/adding lanes is just
@@ -139,10 +153,34 @@ export type BoardConfig = {
   // Card placement, by "<kind>:<id>". Physical position is the user's own
   // decision and reads back as their reasoning — so it persists.
   order: Record<string, number>;
+  // Free-canvas placement, by "<kind>:<id>" — the exact point the card was
+  // put down. Nothing snaps it: alignment happens only when the user asks for
+  // it (Align), and sorting only when they pick a sort. A card with no entry
+  // here has simply never been placed by hand and gets a flow position.
+  pos: Record<string, { x: number; y: number }>;
   hideDone: boolean;
   circleField: string;
   page: number;
+  // The board is a surface laid over the app's own background, not a
+  // different app: by default the wallpaper/aurora shows through it exactly
+  // as it does everywhere else. Turning this on paints the board opaque for
+  // anyone who wants the cards on a plain field instead.
+  coverBackground: boolean;
+  // Trello-style per-board background — a deep tint chosen from the board
+  // menu. Empty/undefined inherits the app wallpaper (or the plain cover
+  // when coverBackground is on); a set color wins over both.
+  background?: string;
 };
+export const DEFAULT_BOARD_CONFIG: BoardConfig = {
+  view: "canvas", groupBy: "status", sortBy: "manual", filter: "", order: {}, pos: {}, hideDone: false, circleField: "", page: 0, coverBackground: false,
+};
+// Trello's model: one card pool, many named boards, each remembering its own
+// entire setup — view, lanes, sort, filter, hand placements, background. The
+// ACTIVE board's config lives in state.smartBoard (so every existing reducer
+// and screen keeps working untouched); its record here is written through on
+// each config change, and switching boards just swaps which record is live.
+export type SavedBoard = { id: string; name: string; config: BoardConfig };
+export const MAIN_BOARD_ID = "board_main";
 // Global per-type attribute availability — which custom-field names a card
 // of each type presents by default. Per-card customFields extend/override
 // these. Editable by the user AND by the model (setTypeFields).
@@ -154,13 +192,26 @@ export type CardTypeFields = Record<LinkKind, string[]>;
 // height and stack in sequence, so "where it goes" is its position in this
 // list. A per-card `layout` overrides the type default when set.
 export type CardLayout = Record<LinkKind, string[]>;
-export const BUILTIN_FIELDS = ["title", "countdown", "recurring", "status", "tags", "media", "body", "embeds", "origin"] as const;
+// "rows" (the notebook's list of strings) and "search" (a search bar that
+// filters those rows) are fields like any other — placeable, movable and
+// removable from any card, not privileges of one template.
+export const BUILTIN_FIELDS = ["title", "countdown", "recurring", "status", "tags", "search", "rows", "media", "body", "embeds", "origin"] as const;
 export const DEFAULT_CARD_LAYOUT: CardLayout = {
   project:  ["title", "countdown", "body", "media", "embeds"],
   reminder: ["title", "countdown", "recurring", "status", "tags", "media", "embeds"],
-  memory:   ["title", "tags", "body", "media", "embeds"],
+  memory:   ["title", "search", "rows", "tags", "body", "media", "embeds"],
   artifact: ["title", "body", "media", "embeds"],
 };
+// Which face each card type wears by default. Memories are the model's own
+// journal — many short entries under one header — so they page as a notebook
+// rather than multiplying into a card apiece.
+export type CardTemplates = Record<LinkKind, CardTemplate>;
+export const DEFAULT_CARD_TEMPLATES: CardTemplates = {
+  project: "card", reminder: "card", memory: "notebook", artifact: "card",
+};
+// Rows per notebook page. Small enough that a page is one glance, large
+// enough that paging isn't constant.
+export const NOTEBOOK_PAGE_SIZE = 7;
 // Deliberately sparse. A field that is present but empty is dead weight on a
 // card — availability comes from the attribute registry and the model, not
 // from pre-seeding every card with blanks.
@@ -275,9 +326,12 @@ export type AppState = {
   // cannot be undone, so it persists to disk with everything else.
   drafts: Record<string, string>;
   smartBoard: BoardConfig;
+  boards: SavedBoard[];
+  activeBoardId: string;
   cardTypeFields: CardTypeFields;
   fieldDefs: Record<string, FieldDef>;
   cardLayout: CardLayout;
+  cardTemplates: CardTemplates;
   customAgents: { id: string; name: string; modelId: string; instructions: string }[];
   customInstructions: string;
   activeSkills: string[];
@@ -349,10 +403,21 @@ type Action =
   | { type: "setCardLayout"; kind: LinkKind; layout: string[] }
   | { type: "setCardOwnLayout"; ref: CardEmbed; layout: string[] | undefined }
   | { type: "setBoardConfig"; config: Partial<BoardConfig> }
+  | { type: "createBoard"; id: string; name: string; config?: Partial<BoardConfig> }
+  | { type: "switchBoard"; id: string }
+  | { type: "renameBoard"; id: string; name: string }
+  | { type: "duplicateBoard"; id: string; newId: string }
+  | { type: "deleteBoard"; id: string }
   | { type: "reorderCards"; keys: string[] }
   | { type: "setDraft"; key: string; value: string }
   | { type: "clearDrafts"; prefix: string }
   | { type: "setCardMedia"; ref: CardEmbed; media: CardMedia[] }
+  | { type: "setCardRows"; ref: CardEmbed; rows: CardRow[] }
+  | { type: "addCardRows"; ref: CardEmbed; rows: CardRow[] }
+  | { type: "setCardTemplate"; ref: CardEmbed; template: CardTemplate | undefined }
+  | { type: "setTypeTemplate"; kind: LinkKind; template: CardTemplate }
+  | { type: "setCardPos"; key: string; x: number; y: number }
+  | { type: "setCardPositions"; positions: Record<string, { x: number; y: number }> }
   | { type: "convertCard"; ref: CardEmbed; toKind: LinkKind }
   | { type: "applySmartBatch"; batch: LLMBatch; modelId?: string; convId?: string }
   | { type: "task"; projectId: string; title: string; priority?: Priority }
@@ -531,6 +596,13 @@ export function convertCardInState(state: AppState, ref: CardEmbed, toKind: Link
     embeds: src.embeds,
     modelId: src.modelId || "global",
     customFields: { ...(src.customFields || {}) } as Record<string, string>,
+    // A notebook's rows and its face survive conversion for the same reason
+    // links and fields do: form changes, content doesn't.
+    rows: src.rows,
+    template: src.template,
+    media: src.media,
+    origin: src.origin,
+    layout: src.layout,
   };
   // Content with no native slot in the target kind is preserved, not dropped.
   const targetHoldsContent = toKind === "memory" || toKind === "artifact";
@@ -539,10 +611,11 @@ export function convertCardInState(state: AppState, ref: CardEmbed, toKind: Link
   const newId = `${ID_PREFIX[toKind]}_${ids()}`;
   const ts = Date.now();
   let created: any;
-  if (toKind === "memory") created = { id: newId, modelId: carried.modelId, content: content || title, ts, tags: carried.tags, projectId: carried.projectId, priority: carried.priority, links: carried.links, embeds: carried.embeds, customFields: carried.customFields };
-  if (toKind === "reminder") created = { id: newId, title, due: src.due, done: false, ts, priority: carried.priority, projectId: carried.projectId, progress: src.progress || "todo", tags: carried.tags, isTask: !!src.isTask, modelId: carried.modelId, calendarTitle: "Personal Calendar", recurring: src.recurring, links: carried.links, embeds: carried.embeds, customFields: carried.customFields };
-  if (toKind === "project") created = { id: newId, name: title, tasks: ref.kind === "project" ? src.tasks : [], modelId: carried.modelId, links: carried.links, embeds: carried.embeds, customFields: carried.customFields };
-  if (toKind === "artifact") created = { id: newId, title, content: content || title, kind: "custom", modelId: carried.modelId, projectId: carried.projectId, ts, links: carried.links, embeds: carried.embeds, customFields: carried.customFields };
+  const shared = { rows: carried.rows, template: carried.template, media: carried.media, origin: carried.origin, layout: carried.layout };
+  if (toKind === "memory") created = { id: newId, modelId: carried.modelId, content: content || title, ts, tags: carried.tags, projectId: carried.projectId, priority: carried.priority, links: carried.links, embeds: carried.embeds, customFields: carried.customFields, ...shared };
+  if (toKind === "reminder") created = { id: newId, title, due: src.due, done: false, ts, priority: carried.priority, projectId: carried.projectId, progress: src.progress || "todo", tags: carried.tags, isTask: !!src.isTask, modelId: carried.modelId, calendarTitle: "Personal Calendar", recurring: src.recurring, links: carried.links, embeds: carried.embeds, customFields: carried.customFields, ...shared };
+  if (toKind === "project") created = { id: newId, name: title, tasks: ref.kind === "project" ? src.tasks : [], modelId: carried.modelId, links: carried.links, embeds: carried.embeds, customFields: carried.customFields, ...shared };
+  if (toKind === "artifact") created = { id: newId, title, content: content || title, kind: "custom", modelId: carried.modelId, projectId: carried.projectId, ts, links: carried.links, embeds: carried.embeds, customFields: carried.customFields, ...shared };
 
   const fromArr = arrayKeyFor(ref.kind);
   const toArr = arrayKeyFor(toKind);
@@ -597,9 +670,9 @@ export const DEFAULT_MARKET_ITEMS: MarketItem[] = [
   { id: "mus4", kind: "audio", prompt: "Dark industrial warehouse techno loop with heavy modular synth modulation", model: "aud/gemini-3-1-flash-tts", author: "@heavy_voltage", likes: 950, likedByUser: false },
 
   // ── Coding / Presets ──
-  { id: "cod1", kind: "coding", prompt: "Contrast/debate helper: Give a safe option, a bold alternative, and a contrarian critique", model: "pro/gpt-5-1-codex", author: "@dialectic_ai", likes: 3200, likedByUser: false },
+  { id: "cod1", kind: "coding", prompt: "Contrast/debate helper: Give a safe option, a bold alternative, and a contrarian critique", model: "pro/qwen3-coder", author: "@dialectic_ai", likes: 3200, likedByUser: false },
   { id: "cod2", kind: "coding", prompt: "React 3D canvas preset: Render an interactive procedural marble shader sphere", model: "or/qwen-coder-72b", author: "@react_specular", likes: 2500, likedByUser: false },
-  { id: "cod3", kind: "coding", prompt: "Fast rust game engine boilerplate: Initialize a 60fps game loop with input handling", model: "pro/claude-sonnet-5-code", author: "@rust_gear", likes: 4100, likedByUser: false },
+  { id: "cod3", kind: "coding", prompt: "Fast rust game engine boilerplate: Initialize a 60fps game loop with input handling", model: "elite/codestral-2508", author: "@rust_gear", likes: 4100, likedByUser: false },
   { id: "cod4", kind: "coding", prompt: "Automated regex compiler: Synthesize and explain complex regex search patterns", model: "elite/codestral-2508", author: "@parser_regex", likes: 1800, likedByUser: false },
 ];
 
@@ -628,7 +701,7 @@ function initialState(): AppState {
     conversations: [],
     memories: [
       { id: "m_mock1", modelId: "groq/llama-3.3-70b", content: "User prefers dark HSL gradient theme backgrounds.", ts: Date.now() - 3600000 },
-      { id: "m_mock2", modelId: "pro/gpt-5-1-codex", content: "Prefers concise, non-wordy replies.", ts: Date.now() - 7200000 }
+      { id: "m_mock2", modelId: "pro/qwen3-coder", content: "Prefers concise, non-wordy replies.", ts: Date.now() - 7200000 }
     ],
     reminders: [
       { id: "r_mock1", title: "Review agreement consensus deviations", due: Date.now(), done: false, ts: Date.now(), priority: "high", progress: "inprogress", tags: ["consensus", "audit"] },
@@ -678,10 +751,13 @@ function initialState(): AppState {
     gridRows: 2,
     autoConsensusSummary: true,
     drafts: {},
-    smartBoard: { view: "board", groupBy: "status", sortBy: "manual", filter: "", order: {}, hideDone: false, circleField: "", page: 0 },
+    smartBoard: { ...DEFAULT_BOARD_CONFIG },
+    boards: [{ id: MAIN_BOARD_ID, name: "Main board", config: { ...DEFAULT_BOARD_CONFIG } }],
+    activeBoardId: MAIN_BOARD_ID,
     cardTypeFields: { ...DEFAULT_CARD_TYPE_FIELDS },
     fieldDefs: { ...DEFAULT_FIELD_DEFS },
     cardLayout: { ...DEFAULT_CARD_LAYOUT },
+    cardTemplates: { ...DEFAULT_CARD_TEMPLATES },
     customAgents: [],
     customInstructions: "",
     activeSkills: [],
@@ -706,6 +782,45 @@ function originOf(state: AppState, convId?: string): CardOrigin | undefined {
     for (const m of thread) if (m.ts > latest) latest = m.ts;
   }
   return { convId, title: conv.title, ts: latest };
+}
+
+// Memories are the model's journal, so a captured memory is a ROW under a
+// subject header, never a card of its own — twenty things learned about
+// someone is one notebook of twenty rows, not twenty cards competing with
+// their reminders for board space. The header is matched case-insensitively
+// against existing memory cards' first line; only a genuinely new subject
+// mints a card, and it is born as a notebook.
+function fileMemoryRow(
+  state: AppState,
+  header: string,
+  row: string,
+  meta: { modelId?: string; origin?: CardOrigin; tags?: string[]; projectId?: string; priority?: Priority; fingerprint?: string },
+): AppState {
+  const head = (header || "Notes on this user").trim();
+  const line = row.trim();
+  if (!line) return state;
+  const host = state.memories.find((x) => x.content.split("\n")[0].trim().toLowerCase() === head.toLowerCase());
+  if (host) {
+    if (isSemanticDuplicate(line, host.rows || [])) return state;
+    return {
+      ...state,
+      memories: state.memories.map((x) =>
+        x.id === host.id ? { ...x, rows: [...(x.rows || []), line], template: x.template || "notebook", ts: Date.now() } : x
+      ),
+    };
+  }
+  if (isSemanticDuplicate(line, state.memories.flatMap((x) => (x.rows?.length ? x.rows : [x.content])))) return state;
+  return {
+    ...state,
+    memories: [
+      {
+        id: `m_${ids()}`, modelId: meta.modelId || "global", content: head, rows: [line], template: "notebook",
+        ts: Date.now(), tags: meta.tags, projectId: meta.projectId, priority: meta.priority || "none",
+        fingerprint: meta.fingerprint, origin: meta.origin,
+      },
+      ...state.memories,
+    ],
+  };
 }
 
 function applySmart(state: AppState, batch: SmartBatch, modelId?: string, convId?: string): AppState {
@@ -737,9 +852,12 @@ function applySmart(state: AppState, batch: SmartBatch, modelId?: string, convId
   for (const m of batch.memories) {
     if (seen[m.fingerprint]) continue;
     seen[m.fingerprint] = true;
-    if (isSemanticDuplicate(m.content, next.memories.map((x) => x.content))) continue;
     const projectId = m.projectId?.startsWith("virt_") ? projectIdMap[m.projectId.slice(5)] : m.projectId;
-    next = { ...next, memories: [{ id: `m_${ids()}`, modelId: modelId || "global", content: m.content, ts: Date.now(), tags: m.tags, projectId, priority: m.priority || "none", fingerprint: m.fingerprint, origin }, ...next.memories] };
+    // The regex pass has no notion of subject, so its captures go to the
+    // general journal — same rule as the model's captures: a row, not a card.
+    next = fileMemoryRow(next, "Notes on this user", m.content, {
+      modelId, origin, tags: m.tags, projectId, priority: m.priority, fingerprint: m.fingerprint,
+    });
     recordConvProject(projectId);
   }
   for (const r of batch.reminders) {
@@ -793,9 +911,11 @@ function applyLLMBatch(state: AppState, batch: LLMBatch, modelId?: string, convI
   for (const m of batch.memories) {
     if (seen[m.fingerprint]) continue;
     seen[m.fingerprint] = true;
-    if (isSemanticDuplicate(m.content, next.memories.map((x) => x.content))) continue;
     const projectId = resolveProjectId(m.projectId);
-    next = { ...next, memories: [{ id: `m_${ids()}`, modelId: modelId || "global", content: m.content, ts: Date.now(), tags: m.tags, projectId, priority: m.priority || "none", fingerprint: m.fingerprint, origin }, ...next.memories] };
+    // The model names the subject; the row is filed under it.
+    next = fileMemoryRow(next, m.notebook, m.content, {
+      modelId, origin, tags: m.tags, projectId, priority: m.priority, fingerprint: m.fingerprint,
+    });
     recordConvProject(projectId);
   }
   for (const r of batch.reminders) {
@@ -848,11 +968,31 @@ function completeReminder(r: Reminder): Reminder {
   return { ...r, done: true, progress: "done" };
 }
 
+// Every change to the live board config is written through to its saved
+// record, so the boards list is never stale and a switch never loses work.
+function withActiveBoard(state: AppState, smartBoard: BoardConfig): AppState {
+  return { ...state, smartBoard, boards: state.boards.map((b) => b.id === state.activeBoardId ? { ...b, config: smartBoard } : b) };
+}
+
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case "hydrate": {
       const base = initialState();
-      return { ...base, ...action.state, cardPrompts: { ...base.cardPrompts, ...(action.state.cardPrompts || {}) }, chatMode: { ...base.chatMode, ...(action.state.chatMode || {}) }, webSearch: { ...base.webSearch, ...(action.state.webSearch || {}) }, smartBoard: { ...base.smartBoard, ...(action.state.smartBoard || {}) }, cardTypeFields: { ...base.cardTypeFields, ...(action.state.cardTypeFields || {}) }, fieldDefs: { ...base.fieldDefs, ...(action.state.fieldDefs || {}) }, cardLayout: { ...base.cardLayout, ...(action.state.cardLayout || {}) }, drafts: { ...(action.state.drafts || {}) }, seen: { ...(action.state.seen || {}) }, hydrated: true };
+      const merged = { ...base, ...action.state, cardPrompts: { ...base.cardPrompts, ...(action.state.cardPrompts || {}) }, chatMode: { ...base.chatMode, ...(action.state.chatMode || {}) }, webSearch: { ...base.webSearch, ...(action.state.webSearch || {}) }, smartBoard: { ...base.smartBoard, ...(action.state.smartBoard || {}) }, cardTypeFields: { ...base.cardTypeFields, ...(action.state.cardTypeFields || {}) }, fieldDefs: { ...base.fieldDefs, ...(action.state.fieldDefs || {}) }, cardLayout: { ...base.cardLayout, ...(action.state.cardLayout || {}) }, cardTemplates: { ...base.cardTemplates, ...(action.state.cardTemplates || {}) }, drafts: { ...(action.state.drafts || {}) }, seen: { ...(action.state.seen || {}) }, hydrated: true };
+      // Migration to multi-board: pre-boards state carries its whole board
+      // life in smartBoard — that becomes the one saved board, nothing lost.
+      if (!Array.isArray(merged.boards) || merged.boards.length === 0) {
+        merged.boards = [{ id: MAIN_BOARD_ID, name: "Main board", config: { ...merged.smartBoard } }];
+        merged.activeBoardId = MAIN_BOARD_ID;
+      } else if (!merged.boards.some((b) => b.id === merged.activeBoardId)) {
+        merged.activeBoardId = merged.boards[0].id;
+        merged.smartBoard = { ...base.smartBoard, ...merged.boards[0].config };
+      } else {
+        // smartBoard is authoritative for the active board (it takes every
+        // write); keep its saved record in step after a reload.
+        merged.boards = merged.boards.map((b) => b.id === merged.activeBoardId ? { ...b, config: merged.smartBoard } : b);
+      }
+      return merged;
     }
     case "category": return { ...state, activeCategory: action.category };
     case "tier": return { ...state, tier: action.tier, credits: Math.max(state.credits, TIER_INFO[action.tier].pool) };
@@ -1053,7 +1193,39 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, fieldDefs: defs, cardTypeFields };
     }
     case "setBoardConfig":
-      return { ...state, smartBoard: { ...state.smartBoard, ...action.config } };
+      return withActiveBoard(state, { ...state.smartBoard, ...action.config });
+    case "createBoard": {
+      const name = action.name.trim() || `Board ${state.boards.length + 1}`;
+      // A new board starts from a clean default config — its own lanes, its
+      // own placements — not from a copy of the current one (that's what
+      // duplicateBoard is for). Card pool is shared; the board is a lens.
+      const config: BoardConfig = { ...DEFAULT_BOARD_CONFIG, view: "board", ...(action.config || {}) };
+      return { ...state, boards: [...state.boards, { id: action.id, name, config }], activeBoardId: action.id, smartBoard: config };
+    }
+    case "switchBoard": {
+      const target = state.boards.find((b) => b.id === action.id);
+      if (!target || action.id === state.activeBoardId) return state;
+      return { ...state, activeBoardId: action.id, smartBoard: { ...target.config } };
+    }
+    case "renameBoard": {
+      const name = action.name.trim();
+      if (!name) return state;
+      return { ...state, boards: state.boards.map((b) => b.id === action.id ? { ...b, name } : b) };
+    }
+    case "duplicateBoard": {
+      const src = state.boards.find((b) => b.id === action.id);
+      if (!src) return state;
+      const config = src.id === state.activeBoardId ? state.smartBoard : src.config;
+      const copy: SavedBoard = { id: action.newId, name: `${src.name} (copy)`, config: { ...config, order: { ...config.order }, pos: { ...config.pos } } };
+      return { ...state, boards: [...state.boards, copy], activeBoardId: copy.id, smartBoard: { ...copy.config } };
+    }
+    case "deleteBoard": {
+      // The screen needs a board to stand on — the last one can't go.
+      if (state.boards.length <= 1) return state;
+      const boards = state.boards.filter((b) => b.id !== action.id);
+      if (action.id !== state.activeBoardId) return { ...state, boards };
+      return { ...state, boards, activeBoardId: boards[0].id, smartBoard: { ...boards[0].config } };
+    }
     case "setDraft": {
       const drafts = { ...state.drafts };
       if (action.value) drafts[action.key] = action.value; else delete drafts[action.key];
@@ -1066,12 +1238,37 @@ function reducer(state: AppState, action: Action): AppState {
     }
     case "setCardMedia":
       return mutateCard(state, action.ref, (item) => ({ ...item, media: action.media }));
+    case "setCardRows":
+      return mutateCard(state, action.ref, (item) => ({ ...item, rows: action.rows }));
+    case "addCardRows": {
+      // Appending is how a journal grows — an existing row is never rewritten
+      // by an append, and an exact duplicate is not a new entry.
+      const add = action.rows.map((r) => r.trim()).filter(Boolean);
+      if (!add.length) return state;
+      return mutateCard(state, action.ref, (item) => {
+        const existing: CardRow[] = item.rows || [];
+        const seen = new Set(existing.map((r) => r.trim().toLowerCase()));
+        return { ...item, rows: [...existing, ...add.filter((r) => !seen.has(r.toLowerCase()))] };
+      });
+    }
+    case "setCardTemplate":
+      return mutateCard(state, action.ref, (item) => ({ ...item, template: action.template }));
+    case "setTypeTemplate":
+      return { ...state, cardTemplates: { ...state.cardTemplates, [action.kind]: action.template } };
+    case "setCardPos":
+      return withActiveBoard(state, { ...state.smartBoard, pos: { ...state.smartBoard.pos, [action.key]: { x: action.x, y: action.y } } });
+    case "setCardPositions":
+      // Bulk placement — what Align dispatches. Align is the only thing that
+      // moves a card the user placed, and only because they asked for it; the
+      // layout maths lives in the board screen, which knows how tall each
+      // card actually is.
+      return withActiveBoard(state, { ...state.smartBoard, pos: { ...state.smartBoard.pos, ...action.positions } });
     case "reorderCards": {
       const order = { ...state.smartBoard.order };
       action.keys.forEach((k, i) => { order[k] = i; });
       // A drag is a decision; it must not be silently undone by an active
       // sort, so placing a card also returns the board to manual order.
-      return { ...state, smartBoard: { ...state.smartBoard, order, sortBy: "manual" } };
+      return withActiveBoard(state, { ...state.smartBoard, order, sortBy: "manual" });
     }
     case "convertCard":
       return convertCardInState(state, action.ref, action.toKind);
@@ -1488,47 +1685,93 @@ const CREATION_TEMPLATES = [
   },
 ];
 
+// Combinatorial, not a playlist. The old version drew from 13 templates ×
+// 4 prompts = 52 strings and appended "#57" to make repeats look new, so a
+// scroll of any depth showed the same handful of items over and over. These
+// axes multiply out to hundreds of thousands of distinct prompts, and the
+// image for each is generated FROM its own prompt rather than pulled from a
+// stock CDN — so what the tile shows is what the prompt says.
+const SUBJECTS: Record<string, string[]> = {
+  image: [
+    "a derelict lighthouse", "a mechanical hummingbird", "an overgrown subway platform", "a glass observatory",
+    "a fox made of stained glass", "a floating monastery", "a diver in a flooded library", "a clockwork orchard",
+    "twin moons over a salt flat", "a cathedral grown from coral", "a lone tram in deep snow", "a paper city in the rain",
+    "an astronaut tending bonsai", "a whale swimming through clouds", "a market at the edge of a canyon",
+    "a bridge between two storms", "a greenhouse on a frozen lake", "a train station inside a tree",
+  ],
+  video: [
+    "ink blooming through water", "a drone descending into a volcano", "neon reflections on wet asphalt",
+    "a time-lapse of frost forming", "a hawk's-eye pass over dunes", "sparks drifting from a forge",
+    "a slow orbit around a derelict satellite", "waves collapsing in reverse", "a city waking at dawn",
+    "silk unfurling in zero gravity", "a canyon filling with fog", "headlights threading a mountain pass",
+  ],
+  audio: [
+    "a rain-soaked piano loop", "brushed drums under a muted trumpet", "a modular synth arpeggio",
+    "cello over vinyl crackle", "a choir folded into tape hiss", "handpan and distant thunder",
+    "an upright bass walking through smoke", "glass harmonica and sub-bass", "a marimba pattern in 7/8",
+  ],
+  coding: [
+    "a rate limiter with a token bucket", "a virtual list that recycles rows", "an undo stack with coalescing",
+    "a diff algorithm for nested trees", "a retry policy with jittered backoff", "a query cache keyed by shape",
+    "a state machine for upload flows", "a parser for a small expression language", "a scheduler with priority lanes",
+  ],
+};
+const TREATMENTS: Record<string, string[]> = {
+  image: ["oil on linen", "long-exposure photography", "risograph print", "matte painting", "tilt-shift macro", "cyanotype", "pencil and wash", "volumetric render", "woodblock print", "infrared film"],
+  video: ["shot on 16mm", "anamorphic, shallow depth", "high-speed 1000fps", "handheld documentary", "locked-off wide", "drone follow-cam", "macro probe lens"],
+  audio: ["lo-fi, tape-saturated", "orchestral, wide stereo", "minimal, sparse", "dub-delayed", "granular, textural", "live room, one take"],
+  coding: ["TypeScript, no dependencies", "Rust, zero-alloc", "Go, context-aware", "Python, fully typed", "Swift, protocol-oriented"],
+};
+const MOODS: Record<string, string[]> = {
+  image: ["at blue hour", "under heavy fog", "in low winter sun", "lit by a single lamp", "during a dust storm", "beneath aurora", "in the last light of day", "under a full moon"],
+  video: ["at 3am", "in monsoon rain", "through harsh noon light", "as a storm breaks", "in falling snow", "at golden hour"],
+  audio: ["for late-night driving", "for a slow morning", "for deep focus", "for a long train ride", "for closing time"],
+  coding: ["with property-based tests", "optimised for readability", "with an explicit error taxonomy", "documented inline", "benchmarked against a naive version"],
+};
+const CATEGORY_OF: Record<string, string[]> = {
+  image: ["architecture", "surreal-nature", "retro-future", "portrait", "landscape"],
+  video: ["motion", "aerial", "macro-tech", "city-night"],
+  audio: ["chill", "electronic", "orchestral", "ambient"],
+  coding: ["systems", "backend", "frontend", "tooling"],
+};
+
+const pick = <T,>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)];
+
 export function generateMoreMarketItems(count: number, currentLen: number, category?: string, kind?: MarketItem["kind"]): MarketItem[] {
   const items: MarketItem[] = [];
-  let pool = category
-    ? CREATION_TEMPLATES.filter((t) => t.category === category)
-    : kind
-    ? CREATION_TEMPLATES.filter((t) => t.kind === kind)
-    : CREATION_TEMPLATES;
-  if (pool.length === 0) pool = kind ? CREATION_TEMPLATES.filter((t) => t.kind === kind) : CREATION_TEMPLATES;
-  if (pool.length === 0) pool = CREATION_TEMPLATES;
+  const kinds: MarketItem["kind"][] = ["image", "video", "audio", "coding"];
   for (let i = 0; i < count; i++) {
-    const id = `generated_${currentLen + i}_${Math.random().toString(36).substring(2, 9)}`;
-    const template = pool[Math.floor(Math.random() * pool.length)];
-    const prompt = template.prompts[Math.floor(Math.random() * template.prompts.length)] + ` #${currentLen + i + 1}`;
-    const kind = template.kind;
-    const author = AUTHORS[Math.floor(Math.random() * AUTHORS.length)];
-    const model = MODELS_POOL[Math.floor(Math.random() * MODELS_POOL.length)];
-    const likes = Math.floor(Math.random() * 800) + 120;
+    const k: MarketItem["kind"] = kind || (category
+      ? (kinds.find((x) => CATEGORY_OF[x].includes(category)) || pick(kinds))
+      : pick(kinds));
+    const prompt = `${pick(SUBJECTS[k])}, ${pick(TREATMENTS[k])}, ${pick(MOODS[k])}`;
+    const id = `gen_${currentLen + i}_${Math.random().toString(36).slice(2, 9)}`;
 
-    // Static CDN, not live AI generation — pollinations.ai generates each
-    // image on demand, which is slow and rate-limit-prone once dozens of
-    // these fire at once (every generated grid tile), which is exactly what
-    // was causing previews to render blank. picsum is a fast static image
-    // CDN; seeding it with the item id keeps each item's thumbnail stable.
-    let url = `https://picsum.photos/seed/${id}/300/300`;
-    if (kind === "video") {
-      url = VIDEO_POOL[Math.floor(Math.random() * VIDEO_POOL.length)];
-    } else if (kind === "audio") {
-      url = MUSIC_POOL[Math.floor(Math.random() * MUSIC_POOL.length)];
-    }
+    // Images are generated from the prompt itself (Pollinations, keyless), so
+    // a tile actually depicts its caption. A fixed seed per id keeps a given
+    // item stable across re-renders instead of reshuffling on every scroll.
+    let url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=512&height=512&nologo=true&model=flux&seed=${Math.abs(hashString(id)) % 1_000_000}`;
+    if (k === "video") url = VIDEO_POOL[Math.abs(hashString(id)) % VIDEO_POOL.length];
+    else if (k === "audio") url = MUSIC_POOL[Math.abs(hashString(id)) % MUSIC_POOL.length];
 
     items.push({
       id,
-      kind,
+      kind: k,
       prompt,
-      model,
-      author,
-      likes,
+      model: pick(MODELS_POOL),
+      author: pick(AUTHORS),
+      likes: Math.floor(Math.random() * 800) + 120,
       likedByUser: false,
       url,
-      category: template.category,
+      category: category && CATEGORY_OF[k].includes(category) ? category : pick(CATEGORY_OF[k]),
     });
   }
   return items;
+}
+
+// Stable per-id seed so a tile keeps the same image between renders.
+function hashString(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h << 5) - h + s.charCodeAt(i) | 0;
+  return h;
 }

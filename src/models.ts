@@ -28,44 +28,29 @@ export const CATEGORIES: { id: Category; label: string }[] = [
 // messages, so per-request cost has to stay sane at every tier.
 export const MODELS: ModelDef[] = [
 
-  // ── General · Free (8) — real, current, reputable models per provider ────
+  // ── General · Free (7) — real, current, reputable models per provider ────
   { id: "free/claude-haiku-4-5",    label: "Claude Haiku 4.5",   short: "Hai5", desc: "Anthropic's fast model. Sharp, reliable.",       tier: "free", category: ["general"],           weight: 1, color: "#f6a4c9" },
   { id: "free/gemini-3-6-flash",    label: "Gemini 3.6 Flash",   short: "G3.6F",desc: "Google's current flash model. 1M ctx.",          tier: "free", category: ["general"],           weight: 1, color: "#7fd8c4" },
-  { id: "free/nemotron-super",      label: "Nemotron Super 120B",short: "NemS", desc: "NVIDIA's strong open MoE. 1M ctx.",              tier: "free", category: ["general"],           weight: 1, color: "#8ee878" },
   { id: "free/mistral-small",       label: "Mistral Small 3.2",  short: "MiSm", desc: "Mistral's current small model. Great value.",    tier: "free", category: ["general"],           weight: 1, color: "#ffb066" },
   { id: "free/command-r",           label: "Command R",          short: "CmdR", desc: "Cohere's generalist model.",                     tier: "free", category: ["general"],           weight: 1, color: "#f2c14e" },
   { id: "free/minimax-m3",          label: "MiniMax M3",         short: "MM3",  desc: "MiniMax's current flagship. 1M ctx.",            tier: "free", category: ["general"],           weight: 1, color: "#ff9e6b" },
-  { id: "free/llama-4-scout",       label: "Llama 4 Scout",      short: "L4Sc", desc: "Meta's fast MoE. Great for everyday tasks.",     tier: "free", category: ["general"],           weight: 1, color: "#4be6b1" },
-  { id: "free/qwen3-30b",           label: "Qwen3 30B",          short: "Qw3",  desc: "Alibaba's current mid-size model.",              tier: "free", category: ["general"],           weight: 1, color: "#e8c15a" },
 
   // ── General · Pro (4) ─────────────────────────────────────────────────────
-  { id: "pro/gemini-3-1-pro",       label: "Gemini 3.1 Pro",     short: "G3.1P",desc: "Google's current flagship. 1M ctx.",            tier: "pro",  category: ["general"],           weight: 5, color: "#7fd8c4" },
-  { id: "pro/claude-sonnet-5",      label: "Claude Sonnet 5",    short: "CS5",  desc: "Anthropic's best balanced model. 1M ctx.",       tier: "pro",  category: ["general"],           weight: 5, color: "#f6a4c9" },
-  { id: "pro/gpt-5-6-terra",        label: "GPT-5.6 Terra",      short: "5.6T", desc: "OpenAI's current flagship. 1M+ ctx.",            tier: "pro",  category: ["general"],           weight: 5, color: "#d9d3c7" },
   { id: "pro/grok-4-5",             label: "Grok 4.5",           short: "Gr4.5",desc: "xAI's current model. Real-time knowledge.",      tier: "pro",  category: ["general"],           weight: 5, color: "#ff9e6b" },
 
   // ── General · Elite (4) — stronger, not egregiously priced, no Opus ──────
   { id: "elite/sonar-reasoning-pro",label: "Sonar Reasoning Pro", short: "Sonr", desc: "Perplexity's reasoning model. Live web-grounded.",tier: "elite", category: ["general"],          weight: 6, color: "#6bb8ff" },
   { id: "elite/mistral-large",      label: "Mistral Large 2512", short: "MiLg", desc: "Mistral's current flagship. Excellent value.",   tier: "elite", category: ["general"],          weight: 6, color: "#ffb066" },
-  { id: "elite/nemotron-ultra",     label: "Nemotron Ultra 550B",short: "NemU", desc: "NVIDIA's largest open MoE. 1M ctx.",             tier: "elite", category: ["general"],          weight: 7, color: "#8ee878" },
-  { id: "elite/gpt-5-6-sol-pro",    label: "GPT-5.6 Sol Pro",    short: "5.6S", desc: "OpenAI's top-end frontier model.",               tier: "elite", category: ["general"],          weight: 9, color: "#d9d3c7" },
 
   // ── Coding · low-cost Pro (2) — there is no free-tier coding, full stop;
   // these two just cost the fewest credits within Pro/Elite, same as any
   // other low-weight model in another category. No "(free)" anywhere in
   // their text — that word doesn't apply to this category at all.
-  { id: "free/qwen3-coder",         label: "Qwen3 Coder Lite",   short: "Q3CL", desc: "Qwen3's coder model, lighter/faster variant, 1M ctx.", tier: "pro", category: ["coding"],       weight: 2, color: "#e8c15a" },
-  { id: "free/qwen-coder-32b",      label: "Qwen Coder 32B",     short: "QC32", desc: "Code-tuned Qwen, fast inference.",               tier: "pro", category: ["coding"],            weight: 2, color: "#e8c15a" },
 
   // ── Coding · Pro (4) ──────────────────────────────────────────────────────
-  { id: "pro/gpt-oss-20b",          label: "GPT-OSS 20B",        short: "OSS",  desc: "OpenAI's open-weight coding model.",             tier: "pro",  category: ["coding"],            weight: 3, color: "#d9d3c7" },
-  { id: "pro/qwen3-coder",          label: "Qwen3 Coder",        short: "Q3C",  desc: "World's largest open coder. 1M ctx.",            tier: "pro",  category: ["coding"],            weight: 4, color: "#e8c15a" },
-  { id: "pro/gpt-5-1-codex",        label: "GPT-5.1 Codex",      short: "5.1Cx",desc: "OpenAI's current dedicated code model.",         tier: "pro",  category: ["coding"],            weight: 5, color: "#d9d3c7" },
-  { id: "pro/claude-sonnet-5-code", label: "Claude Sonnet 5",    short: "CS5C", desc: "Anthropic's best for agentic coding.",           tier: "pro",  category: ["coding"],            weight: 5, color: "#f6a4c9" },
 
   // ── Coding · Elite (3) — no Opus ──────────────────────────────────────────
   { id: "elite/codestral-2508",     label: "Codestral 2508",     short: "Cst",  desc: "Mistral's elite coder. 256k ctx.",               tier: "elite", category: ["coding"],           weight: 6, color: "#ffb066" },
-  { id: "elite/qwen3-coder-plus",   label: "Qwen3 Coder Plus",   short: "Q3CP", desc: "Qwen3's pro code tier. 1M ctx.",                 tier: "elite", category: ["coding"],           weight: 7, color: "#e8c15a" },
   { id: "elite/kimi-k2-7-code",     label: "Kimi K2.7 Code",     short: "K2.7C",desc: "Moonshot's dedicated coding model.",             tier: "elite", category: ["coding"],           weight: 7, color: "#4be6b1" },
 
   // ── Image · Pro (3) — SPEC.md: no free tier access to media gen. Pollinations

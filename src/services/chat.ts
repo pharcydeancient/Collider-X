@@ -41,7 +41,7 @@ export function friendlyErrorMessage(error: unknown): string {
 // The env var still wins when set, so a rotated key never needs a code
 // change — but an environment without a .env no longer silently loses every
 // provider, which is what an env-only setup caused.
-const GROQ_KEYS = (process.env.EXPO_PUBLIC_GROQ_API_KEYS || "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,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").split(",").filter(Boolean);
+const GROQ_KEYS = (process.env.EXPO_PUBLIC_GROQ_API_KEYS || "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").split(",").filter(Boolean);
 const OPENROUTER_KEY = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY || "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";
 const EXA_KEY = process.env.EXPO_PUBLIC_EXA_API_KEY || "324b68a6-2633-4b9e-b3b4-f5cd960d595b";
 const TAVILY_KEY = process.env.EXPO_PUBLIC_TAVILY_API_KEY || "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";
@@ -167,38 +167,28 @@ const ROUTES: Record<string, Route> = {
   // live catalog (fetched directly), not guessed ────────────────────────────
   "free/claude-haiku-4-5":       { provider: "openrouter", remote: "anthropic/claude-haiku-4.5" },
   "free/gemini-3-6-flash":       { provider: "google",     remote: "gemini-3.6-flash",              vision: true },
-  "free/nemotron-super":         { provider: "openrouter", remote: "nvidia/nemotron-3-super-120b-a12b:free" },
   "free/mistral-small":          { provider: "openrouter", remote: "mistralai/mistral-small-3.2-24b-instruct" },
   "free/command-r":              { provider: "openrouter", remote: "cohere/command-r-08-2024" },
   "free/minimax-m3":             { provider: "openrouter", remote: "minimax/minimax-m3" },
-  "free/llama-4-scout":          { provider: "groq",       remote: "meta-llama/llama-4-scout-17b-16e-instruct" },
-  "free/qwen3-30b":              { provider: "openrouter", remote: "qwen/qwen3-30b-a3b-instruct-2507" },
 
   // ── General · Pro ─────────────────────────────────────────────────────────
-  "pro/gemini-3-1-pro":          { provider: "google",     remote: "gemini-3.1-pro-preview",        vision: true },
-  "pro/claude-sonnet-5":         { provider: "openrouter", remote: "anthropic/claude-sonnet-5",      vision: true },
-  "pro/gpt-5-6-terra":           { provider: "openrouter", remote: "openai/gpt-5.6-terra",           vision: true },
+  // Groq Compound was added and then removed: it is a harness over
+  // openai/gpt-oss-120b (named by Groq's own rate-limit error), so it
+  // reintroduced a model family cut from the roster, and its one unique
+  // contribution — server-side search — is already provided here by the
+  // Exa/Tavily pass that feeds every model.
   "pro/grok-4-5":                { provider: "openrouter", remote: "x-ai/grok-4.5",                 vision: true },
 
   // ── General · Elite — no Opus, no Fable ───────────────────────────────────
   "elite/sonar-reasoning-pro":   { provider: "openrouter", remote: "perplexity/sonar-reasoning-pro" },
   "elite/mistral-large":         { provider: "openrouter", remote: "mistralai/mistral-large-2512" },
-  "elite/nemotron-ultra":        { provider: "openrouter", remote: "nvidia/nemotron-3-ultra-550b-a55b" },
-  "elite/gpt-5-6-sol-pro":       { provider: "openrouter", remote: "openai/gpt-5.6-sol-pro",         vision: true },
 
   // ── Coding · Free ─────────────────────────────────────────────────────────
-  "free/qwen3-coder":            { provider: "openrouter", remote: "qwen/qwen3-coder:free" },
-  "free/qwen-coder-32b":         { provider: "openrouter", remote: "qwen/qwen-2.5-coder-32b-instruct" },
 
   // ── Coding · Pro ─────────────────────────────────────────────────────────
-  "pro/gpt-oss-20b":             { provider: "groq",       remote: "openai/gpt-oss-20b" },
-  "pro/qwen3-coder":             { provider: "openrouter", remote: "qwen/qwen3-coder" },
-  "pro/gpt-5-1-codex":           { provider: "openrouter", remote: "openai/gpt-5.1-codex" },
-  "pro/claude-sonnet-5-code":    { provider: "openrouter", remote: "anthropic/claude-sonnet-5" },
 
   // ── Coding · Elite — no Opus ───────────────────────────────────────────────
   "elite/codestral-2508":        { provider: "openrouter", remote: "mistralai/codestral-2508" },
-  "elite/qwen3-coder-plus":      { provider: "openrouter", remote: "qwen/qwen3-coder-plus" },
   "elite/kimi-k2-7-code":        { provider: "openrouter", remote: "moonshotai/kimi-k2.7-code" },
 
   // ── Image generation — real OpenRouter image models for Pro/Elite (already
@@ -362,8 +352,10 @@ export async function sendChat(
   // in-context.
   if (opts.mode === "research") sysParts.push("Research mode: produce a structured research report with a short title line, a summary, a '## Key Findings' section as a list, and a '## Sources' section citing which search result each finding came from. Note any uncertainty explicitly.");
   if (opts.mode === "deep") sysParts.push("Deep mode: produce a thorough structured report — title line, '## Analysis' walking through the reasoning step-by-step, '## Edge Cases & Caveats', and '## Conclusion'. This should read as a standalone document, not a conversational reply.");
-  // Research/Deep mode → Exa (neural search for in-depth content).
-  // Web search toggle → Google/Gemini (real Google index, best for current facts).
+  // The globe toggle in the composer, and research/deep mode, all land here.
+  // Results are folded into the system message BEFORE the provider is chosen,
+  // so every route — Groq, Google, OpenRouter — gets the same search context.
+  // Exa is primary with Tavily behind it; both keys verified answering live.
   const wantsSearch = opts.webSearch || opts.mode === "research" || opts.mode === "deep";
   if (wantsSearch && prompt) {
     const results = await webSearch(prompt, opts.mode);

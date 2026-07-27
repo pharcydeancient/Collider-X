@@ -11,32 +11,30 @@ export const SCREEN_H = Dimensions.get("window").height;
 // while fontFamily points at the Regular file gets a faux/synthetic bold that
 // reads thin and blurry at small sizes. fontFamilyForWeight resolves to the
 // correct real file so "bold" is an actual bold face, not a faux render.
-export const FONT_REGULAR = "Manrope_400Regular";
-export const FONT_MEDIUM = "Manrope_500Medium";
-export const FONT_SEMIBOLD = "Manrope_600SemiBold";
-export const FONT_BOLD = "Manrope_700Bold";
-// No 800 weight ships for Instrument Sans; 700 is the heaviest real file, so
-// anything asking for 800/900 resolves to the Bold face (not a faux-heavier
-// synthetic weight).
-export const FONT_EXTRABOLD = FONT_BOLD;
+export const FONT_REGULAR = "Inter_400Regular";
+export const FONT_MEDIUM = "Inter_500Medium";
+export const FONT_SEMIBOLD = "Inter_600SemiBold";
+export const FONT_BOLD = "Inter_700Bold";
+export const FONT_EXTRABOLD = "Inter_800ExtraBold";
 export const FONT_FAMILY = FONT_REGULAR;
 
 // IBM Plex Mono — the redesign's "instrument panel" voice: ALIGN, CONSENSUS,
 // tier badges, scores, credits, timestamps. Applied explicitly per-style via
 // fontFamily: FONT_MONO (or the `mono` helper) since withFont only fills the
 // gap for the sans default.
-// Spec: Playfair Display 700/800 for headers. Body is Manrope; the display
-// face is what gives headers their weight — without it every heading was just
-// bold body text, which is why the app read flat next to the design system.
-export const FONT_DISPLAY = "PlayfairDisplay_700Bold";
-export const FONT_DISPLAY_BLACK = "PlayfairDisplay_800ExtraBold";
+// Headers are Inter too, heavier and tighter — one typeface across the app,
+// as the original design had it. A display serif (Playfair) was introduced
+// later and read as a different app's header pasted on top of this one.
+export const FONT_DISPLAY = "Inter_700Bold";
+export const FONT_DISPLAY_BLACK = "Inter_800ExtraBold";
 
-export const FONT_MONO = "IBMPlexMono_500Medium";
-export const FONT_MONO_REGULAR = "IBMPlexMono_400Regular";
-export const FONT_MONO_SEMIBOLD = "IBMPlexMono_600SemiBold";
+export const FONT_MONO = "JetBrainsMono_500Medium";
+export const FONT_MONO_REGULAR = "JetBrainsMono_400Regular";
+export const FONT_MONO_SEMIBOLD = "JetBrainsMono_600SemiBold";
 
 export function fontFamilyForWeight(weight?: string | number): string {
   const w = weight === "bold" ? 700 : typeof weight === "string" ? parseInt(weight, 10) || 400 : weight || 400;
+  if (w >= 800) return FONT_EXTRABOLD;
   if (w >= 700) return FONT_BOLD;
   if (w >= 600) return FONT_SEMIBOLD;
   if (w >= 500) return FONT_MEDIUM;

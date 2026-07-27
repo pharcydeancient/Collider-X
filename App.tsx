@@ -29,23 +29,19 @@ import * as Haptics from "expo-haptics";
 import React, { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Video, ResizeMode, Audio } from "expo-av";
 import { Ionicons } from "@expo/vector-icons";
-import { useFonts } from "@expo-google-fonts/manrope";
+import { useFonts } from "@expo-google-fonts/inter";
 import {
-  Manrope_400Regular,
-  Manrope_500Medium,
-  Manrope_600SemiBold,
-  Manrope_700Bold,
-} from "@expo-google-fonts/manrope";
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+  Inter_700Bold,
+  Inter_800ExtraBold,
+} from "@expo-google-fonts/inter";
 import {
-  PlayfairDisplay_700Bold,
-  PlayfairDisplay_800ExtraBold,
-} from "@expo-google-fonts/playfair-display";
-import {
-  IBMPlexMono_400Regular,
-  IBMPlexMono_500Medium,
-  IBMPlexMono_600SemiBold,
-} from "@expo-google-fonts/ibm-plex-mono";
-
+  JetBrainsMono_400Regular,
+  JetBrainsMono_500Medium,
+  JetBrainsMono_600SemiBold,
+} from "@expo-google-fonts/jetbrains-mono";
 import {
   AppProvider,
   useCollider,
@@ -143,8 +139,8 @@ import { MarketScreen } from "./src/screens/MarketScreen";
 import { WallpapersScreen } from "./src/screens/WallpapersScreen";
 import { UpgradeScreen } from "./src/screens/UpgradeScreen";
 
-// Global default font — Manrope body everywhere (spec). Headers use
-// FONT_DISPLAY (Playfair Display) explicitly; see styles/theme.ts.
+// Global default font — Inter everywhere, the app's single typeface (headers
+// included, via FONT_DISPLAY); see styles/theme.ts.
 // down every inline <Text style={{...}}> across the app that forgot
 // fontFamily and silently fell back to the platform default (the "childish"
 // mismatched font). Any Text/TextInput that explicitly sets its own
@@ -240,15 +236,14 @@ type Screen =
 
 export default function App() {
   useFonts({
-    Manrope_400Regular,
-    Manrope_500Medium,
-    Manrope_600SemiBold,
-    Manrope_700Bold,
-    PlayfairDisplay_700Bold,
-    PlayfairDisplay_800ExtraBold,
-    IBMPlexMono_400Regular,
-    IBMPlexMono_500Medium,
-    IBMPlexMono_600SemiBold,
+    Inter_400Regular,
+    Inter_500Medium,
+    Inter_600SemiBold,
+    Inter_700Bold,
+    Inter_800ExtraBold,
+    JetBrainsMono_400Regular,
+    JetBrainsMono_500Medium,
+    JetBrainsMono_600SemiBold,
   });
   return (
     <SafeAreaProvider>
@@ -399,13 +394,11 @@ function ThemeBackground({ wallpaperId }: { wallpaperId: string }) {
         end={{ x: 0.5, y: 1 }}
       />
       <AuroraField tint={preset.colors[0]} accent={accent} />
-      <LinearGradient
-        colors={["transparent", "rgba(0,0,0,0.55)"]}
-        style={StyleSheet.absoluteFill}
-        start={{ x: 0.5, y: 0.45 }}
-        end={{ x: 0.5, y: 1 }}
-        pointerEvents="none"
-      />
+      {/* No vignette. The wallpaper is the wallpaper — a scrim laid over it
+          to "ground the scene" was quietly darkening the bottom half of every
+          screen, which is exactly the tint the background is meant to show
+          through. Contrast belongs to the surfaces that need it (cards,
+          composer, headers), each of which carries its own. */}
     </View>
   );
 }
