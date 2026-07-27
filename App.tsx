@@ -108,6 +108,9 @@ import { SearchBar, useSearch, MessageActions, SettingsScreen, AuthScreen, Conse
 
 // New modular styles & components imports
 import { styles, SCREEN_W, SCREEN_H, FREE_THEMES, PREMIUM_THEMES, WALLPAPERS, FONT_FAMILY, FONT_MONO, fontFamilyForWeight, T, GLASS_CARD, GLASS_PANEL, type DynamicTheme } from "./src/styles/theme";
+import {
+  AuroraField, ScreenTransition, SinkPresence, CategoryDeck, CategoryRail,
+} from "./src/motion";
 import { Glass } from "./src/components/Glass";
 import { ExpandableTrayText } from "./src/components/ExpandableTray";
 import { Markdown } from "./src/components/Markdown";
@@ -257,93 +260,6 @@ export default function App() {
   );
 }
 
-//  Aurora blob — a soft radial glow (transparent falloff) that slowly drifts
-//  and breathes. Uses an SVG radial gradient so the edge dissolves instead of
-//  reading as a hard disc (the old parallax orbs were solid circles).
-function AuroraBlob({
-  gid, size, color, x, y, dx, dy, dur, peak = 1,
-}: { gid: string; size: number; color: string; x: number; y: number; dx: number; dy: number; dur: number; peak?: number }) {
-  const v = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(v, { toValue: 1, duration: dur, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-        Animated.timing(v, { toValue: 0, duration: dur, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-      ]),
-    ).start();
-  }, [v, dur]);
-  return (
-    <Animated.View
-      pointerEvents="none"
-      style={{
-        position: "absolute", left: x, top: y, width: size, height: size,
-        transform: [
-          { translateX: v.interpolate({ inputRange: [0, 1], outputRange: [0, dx] }) },
-          { translateY: v.interpolate({ inputRange: [0, 1], outputRange: [0, dy] }) },
-          { scale: v.interpolate({ inputRange: [0, 1], outputRange: [1, 1.16] }) },
-        ],
-      } as any}
-    >
-      <Svg width={size} height={size}>
-        <Defs>
-          <SvgRadial id={gid} cx="50%" cy="50%" r="50%">
-            <Stop offset="0%" stopColor={color} stopOpacity={peak} />
-            <Stop offset="65%" stopColor={color} stopOpacity={peak * 0.32} />
-            <Stop offset="100%" stopColor={color} stopOpacity={0} />
-          </SvgRadial>
-        </Defs>
-        <Ellipse cx={size / 2} cy={size / 2} rx={size / 2} ry={size / 2} fill={`url(#${gid})`} />
-      </Svg>
-    </Animated.View>
-  );
-}
-
-//  A single twinkling star — small dot that fades in/out on its own clock.
-function Star({ x, y, dur, delay, size }: { x: number; y: number; dur: number; delay: number; size: number; [k:string]:any }) {
-  const v = useRef(new Animated.Value(0.15)).current;
-  useEffect(() => {
-    const run = () =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(v, { toValue: 0.7, duration: dur, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-          Animated.timing(v, { toValue: 0.15, duration: dur, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-        ]),
-      ).start();
-    const t = setTimeout(run, delay);
-    return () => clearTimeout(t);
-  }, [v, dur, delay]);
-  return (
-    <Animated.View
-      pointerEvents="none"
-      style={{ position: "absolute", left: x, top: y, width: size, height: size, borderRadius: size, backgroundColor: "#dfe7f2", opacity: v }}
-    />
-  );
-}
-
-// Deterministic pseudo-random so the starfield is stable across renders
-// (matches the redesign's seeded star placement rather than reshuffling).
-const seed = (n: number) => { const s = Math.sin(n * 999) * 10000; return s - Math.floor(s); };
-const STARS = Array.from({ length: 22 }, (_, i) => ({
-  x: seed(i) * SCREEN_W,
-  y: seed(i + 40) * SCREEN_H,
-  dur: 2600 + seed(i + 80) * 4200,
-  delay: seed(i + 120) * 3400,
-  size: seed(i + 160) > 0.85 ? 2.5 : 1.6,
-}));
-
-//  Ambient aurora field — drifting blue + accent glows over a twinkling
-//  starfield. Replaces the old solid-disc parallax scene.
-function AuroraField({ tint, accent }: { tint: string; accent: string }) {
-  return (
-    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-      <AuroraBlob gid="aur-blue" size={SCREEN_W * 1.15} color="#3c508c" peak={0.5} x={-SCREEN_W * 0.15} y={-SCREEN_H * 0.08} dx={SCREEN_W * 0.14} dy={SCREEN_H * 0.05} dur={26000} />
-      <AuroraBlob gid="aur-accent" size={SCREEN_W * 1.05} color={accent} peak={0.34} x={SCREEN_W * 0.3} y={SCREEN_H * 0.5} dx={-SCREEN_W * 0.1} dy={-SCREEN_H * 0.06} dur={34000} />
-      {STARS.map((s, i) => <Star key={i} {...s} />)}
-    </View>
-  );
-}
-
-//  Theme Background Renderer (fit to screen, contain aspect ratio) 
 function ThemeBackground({ wallpaperId }: { wallpaperId: string }) {
   const customFree = FREE_THEMES.find((t) => t.id === wallpaperId);
   const customPremium = PREMIUM_THEMES.find((t) => t.id === wallpaperId);
@@ -403,31 +319,6 @@ function ThemeBackground({ wallpaperId }: { wallpaperId: string }) {
   );
 }
 
-function ScreenTransition({ children, screenKey }: { children?: ReactNode; screenKey: string }) {
-  const anim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    anim.setValue(0);
-    Animated.timing(anim, {
-      toValue: 1,
-      duration: 220,
-      useNativeDriver: true,
-    }).start();
-  }, [screenKey]);
-
-  const opacity = anim;
-  const translateX = anim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [16, 0],
-  });
-
-  return (
-    <Animated.View style={{ flex: 1, opacity, transform: [{ translateX }] }}>
-      {children}
-    </Animated.View>
-  );
-}
-
 function Shell() {
   const { state, dispatch } = useCollider();
   const { toast } = useToast();
@@ -446,7 +337,7 @@ function Shell() {
   const [rightDrawerScopeModelId, setRightDrawerScopeModelId] = useState<string | undefined>(undefined);
   const [consensus, setConsensus] = useState(false);
   const [composerAttachments, setComposerAttachments] = useState<Record<Category, Attachment[]>>({
-    general: [], image: [], video: [], music: [], coding: []
+    general: [], image: [], video: [], audio: [], coding: []
   });
   const [toastText, setToastText] = useState<string | null>(null);
 
@@ -1122,18 +1013,33 @@ function Home({
       {/* marginBottom gives explicit breathing room above the composer — cards
           were sized to fill this container's measured height exactly, which
           left them touching the composer with no visible gap. */}
+      <CategoryRail
+        onPick={(c) => {
+          if (!isCategoryUnlocked(state.tier, c)) { openUpgrade(); return; }
+          Haptics.selectionAsync().catch(() => {});
+          dispatch({ type: "category", category: c });
+        }}
+      />
+
       <View style={{ flex: 1, minHeight: 0, paddingVertical: 4, marginBottom: 10 }} onLayout={(e) => setGridHeight(e.nativeEvent.layout.height)}>
-        <CardGrid
-          selected={selected}
-          openCard={openCard}
-          openUpgrade={openUpgrade}
-          onLongPressCard={(msg, mId) => {
-            setActiveMessage(msg);
-            setActiveMessageModelId(mId);
-          }}
-          rows={rows}
-          gridHeight={gridHeight}
-        />
+        <CategoryDeck onLocked={openUpgrade}>
+          <ScreenTransition
+            screenKey={state.activeCategory}
+            ordinal={CATEGORIES.findIndex((c) => c.id === state.activeCategory)}
+          >
+            <CardGrid
+              selected={selected}
+              openCard={openCard}
+              openUpgrade={openUpgrade}
+              onLongPressCard={(msg, mId) => {
+                setActiveMessage(msg);
+                setActiveMessageModelId(mId);
+              }}
+              rows={rows}
+              gridHeight={gridHeight}
+            />
+          </ScreenTransition>
+        </CategoryDeck>
       </View>
 
       {/* Collide — was a small icon in the composer toolbar; that put it in
@@ -1147,9 +1053,9 @@ function Home({
           media, not comparable prose, so there's no text verdict to
           produce there; showing it on those tabs would just be a button
           that can never do the one thing it exists to do. */}
-      {(state.activeCategory === "general" || state.activeCategory === "coding") && (
+      <SinkPresence show={state.activeCategory === "general" || state.activeCategory === "coding"}>
         <CollideBanner onPress={openConsensus} disabled={selected.length <= 1} />
-      )}
+      </SinkPresence>
 
       <PromptComposer
         value={prompt}
