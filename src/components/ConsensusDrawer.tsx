@@ -297,7 +297,7 @@ export function ConsensusModal({
     point: dissenters.find((d) => d.modelId === nd.reply.model.id)?.point || "",
   }));
 
-  const consSearch = useSearch(state.consensusRuns as {id:string;prompt:string;verdict:string;[k:string]:any}[], (r) => `${r.prompt} ${r.verdict}`);
+  const consSearch = useSearch(state.consensusRuns, (r) => `${r.prompt} ${r.verdict}`);
 
   return (
     <>

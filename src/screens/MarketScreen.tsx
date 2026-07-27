@@ -186,8 +186,16 @@ export function MarketScreen({ goBack }: { goBack: () => void }) {
       if (sound) {
         await sound.unloadAsync();
       }
+      // No stand-in track. This fell back to a fixed stock song, so tapping
+      // play on an item with no audio played someone else's music as if it
+      // were that creation.
+      const uri = audioUrls[id] || selectedItem?.url;
+      if (!uri) {
+        toast("That creation has no audio to play.");
+        return;
+      }
       const { sound: newSound } = await Audio.Sound.createAsync(
-        { uri: audioUrls[id] || "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" },
+        { uri },
         { shouldPlay: true, isLooping: true }
       );
       setSound(newSound);
@@ -435,17 +443,25 @@ export function MarketScreen({ goBack }: { goBack: () => void }) {
   };
 
   const handleDownload = (item: MarketItem) => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-    toast(`Saved to photo library: ${item.prompt.slice(0, 20)}`);
-    const fallbackImg = `https://picsum.photos/seed/${encodeURIComponent(item.id)}/510/510`;
+    // Save the real asset or say there isn't one. This used to substitute a
+    // picsum stock photo whenever the URL was missing — and for image items it
+    // never even read item.url, so every image "download" handed the user a
+    // stranger's photograph named market-<id>.png. It also announced success
+    // before doing any work, and gave video and audio a .png extension.
+    const url = item.kind === "video" ? videoUrls[item.id]
+      : item.kind === "audio" ? audioUrls[item.id]
+      : item.url;
+    if (!url) {
+      toast("That creation has no file to save.");
+      return;
+    }
+    const ext = item.kind === "video" ? "mp4" : item.kind === "audio" ? "mp3" : "png";
     dispatch({
       type: "file",
-      file: {
-        name: `market-${item.id}.png`,
-        kind: "generated",
-        url: item.kind === "video" ? (videoUrls[item.id] || fallbackImg) : item.kind === "audio" ? (audioUrls[item.id] || fallbackImg) : fallbackImg,
-      },
+      file: { name: `market-${item.id}.${ext}`, kind: "generated", url },
     });
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    toast(`Saved: ${item.prompt.slice(0, 20)}`);
   };
 
   const handleRemix = (item: MarketItem) => {
@@ -710,8 +726,11 @@ export function MarketScreen({ goBack }: { goBack: () => void }) {
                 <View style={{ flexDirection: "row", flexWrap: "wrap" }}>
                   {sortedItems.map((item) => {
                     const isLiked = !!item.likedByUser;
-                    const fallbackImg = `https://picsum.photos/seed/${encodeURIComponent(item.id)}/300/300`;
-                    const imgUrl = item.url || fallbackImg;
+                    // No stand-in art. An item with no image renders as the
+                    // bare tile — the kind badge and prompt already say what it
+                    // is, and a stock photo here was indistinguishable from
+                    // someone's actual creation.
+                    const imgUrl = item.url || null;
 
                     return (
                       <Pressable
@@ -720,7 +739,9 @@ export function MarketScreen({ goBack }: { goBack: () => void }) {
                         style={{ width: "50%", padding: 1 }}
                       >
                         <Glass style={[styles.marketTile, { padding: 0, overflow: "hidden", height: 220, borderRadius: 0, borderWidth: 0 }]}>
-                          <ImageBackground source={{ uri: imgUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+                          {imgUrl ? (
+                            <ImageBackground source={{ uri: imgUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+                          ) : null}
                           <LinearGradient
                             colors={["transparent", "rgba(7,4,13,0.95)"]}
                             style={StyleSheet.absoluteFill}
@@ -948,11 +969,18 @@ export function MarketScreen({ goBack }: { goBack: () => void }) {
                       </ScrollView>
                     </View>
                   ) : (
-                    <ImageBackground
-                      source={{ uri: selectedItem.url || `https://picsum.photos/seed/${encodeURIComponent(selectedItem.id)}/500/500` }}
-                      style={{ width: "100%", height: "100%" }}
-                      resizeMode="contain"
-                    />
+                    selectedItem.url ? (
+                      <ImageBackground
+                        source={{ uri: selectedItem.url }}
+                        style={{ width: "100%", height: "100%" }}
+                        resizeMode="contain"
+                      />
+                    ) : (
+                      <View style={{ width: "100%", height: "100%", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                        <Ionicons name="image-outline" size={28} color="rgba(255,255,255,0.18)" />
+                        <Text style={styles.muted}>No preview for this creation.</Text>
+                      </View>
+                    )
                   )}
                   
                   {/* Category overlay label */}
@@ -1053,11 +1081,13 @@ export function MarketScreen({ goBack }: { goBack: () => void }) {
                     <Text style={{ color: "rgba(238,241,246,0.45)", fontSize: 9, fontWeight: "900", fontFamily: fontFamilyForWeight(900), letterSpacing: 1.2 }}>MORE LIKE THIS</Text>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
                       {moreLikeThis.map((rel) => {
-                        const relFallback = `https://picsum.photos/seed/${encodeURIComponent(rel.id)}/200/200`;
+                        const relImg = rel.kind === "image" ? rel.url : null;
                         return (
                           <Pressable key={rel.id} onPress={() => setSelectedItem(rel)} style={{ width: 96 }}>
                             <View style={{ width: 96, height: 96, borderRadius: 10, overflow: "hidden", backgroundColor: "#161119" }}>
-                              <ImageBackground source={{ uri: rel.url && rel.kind === "image" ? rel.url : relFallback }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+                              {relImg ? (
+                                <ImageBackground source={{ uri: relImg }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+                              ) : null}
                             </View>
                             <Text numberOfLines={2} style={{ color: "rgba(255,255,255,0.7)", fontSize: 9, marginTop: 4, lineHeight: 12 }}>{rel.prompt}</Text>
                           </Pressable>
@@ -1716,7 +1746,8 @@ const localStyles = StyleSheet.create(withFont({
  * behaviour cannot drift between here, the feed, and generation results.
  */
 function CollectionsPane() {
-  const { state, dispatch, toast } = useCollider();
+  const { state, dispatch } = useCollider();
+  const { toast } = useToast();
   const [openId, setOpenId] = useState<string | null>(null);
   const open = state.collections.find((c) => c.id === openId) || null;
   const assetsFor = (ids: string[]) =>

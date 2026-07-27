@@ -358,6 +358,10 @@ export type AppState = {
     // Per-track on/off within the owned playlist — spec: "each track can be
     // toggled on or off in the playlist," independent of play/pause.
     disabledTrackIds: string[];
+    // Where the user put the widget, and whether they collapsed it. Null
+    // coordinates mean "not yet moved" so the default corner can change
+    // without overriding a placement someone chose.
+    widget: { x: number | null; y: number | null; collapsed: boolean };
   };
 };
 
@@ -482,6 +486,8 @@ type Action =
   | { type: "resumePlayer" }
   | { type: "setPlayerVolume"; volume: number }
   | { type: "togglePlayerMute" }
+  | { type: "stopPlayer" }
+  | { type: "setPlayerWidget"; x?: number; y?: number; collapsed?: boolean }
   | { type: "toggleTrackEnabled"; trackId: string };
 
 const ids = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
@@ -766,7 +772,7 @@ function initialState(): AppState {
     collections: [],
     favoriteAssetIds: [],
     savedAssets: [],
-    musicPlayer: { trackId: null, isPlaying: false, volume: 0.6, muted: false, disabledTrackIds: [] },
+    musicPlayer: { trackId: null, isPlaying: false, volume: 0.6, muted: false, disabledTrackIds: [], widget: { x: null, y: null, collapsed: true } },
   };
 }
 
@@ -1347,6 +1353,21 @@ function reducer(state: AppState, action: Action): AppState {
     case "resumePlayer": return { ...state, musicPlayer: { ...state.musicPlayer, isPlaying: !!state.musicPlayer.trackId } };
     case "setPlayerVolume": return { ...state, musicPlayer: { ...state.musicPlayer, volume: Math.max(0, Math.min(1, action.volume)), muted: false } };
     case "togglePlayerMute": return { ...state, musicPlayer: { ...state.musicPlayer, muted: !state.musicPlayer.muted } };
+    // Clearing trackId is what actually dismisses the widget. Pausing left it
+    // on screen permanently, with no control anywhere that could remove it.
+    case "stopPlayer": return { ...state, musicPlayer: { ...state.musicPlayer, trackId: null, isPlaying: false } };
+    case "setPlayerWidget": return {
+      ...state,
+      musicPlayer: {
+        ...state.musicPlayer,
+        widget: {
+          ...state.musicPlayer.widget,
+          ...(action.x !== undefined ? { x: action.x } : {}),
+          ...(action.y !== undefined ? { y: action.y } : {}),
+          ...(action.collapsed !== undefined ? { collapsed: action.collapsed } : {}),
+        },
+      },
+    };
     case "toggleTrackEnabled": {
       const disabled = state.musicPlayer.disabledTrackIds.includes(action.trackId)
         ? state.musicPlayer.disabledTrackIds.filter((id) => id !== action.trackId)
@@ -1549,18 +1570,6 @@ export function extractReminderCandidates(text: string): { title: string; due?: 
 const AUTHORS = ["@cyber_artist", "@pixel_wizard", "@synth_wave", "@prompt_guru", "@neural_dreamer", "@deep_coder", "@wave_maker", "@ai_visionary", "@digital_sculptor", "@sonic_architect", "@glass_lens", "@nano_nature", "@event_horizon", "@crono_watch", "@retro_wave", "@mozart_ambient", "@groove_vinyl", "@heavy_voltage", "@dialectic_ai", "@react_specular", "@rust_gear", "@parser_regex", "@stratus_design", "@aurora_art", "@red_planet", "@spellbound"];
 const MODELS_POOL = ["llama-3.3-70b", "llama-3.1-8b", "gemini-flash", "mixtral-8x7b", "qwen-2.5-coder", "mistral-large", "flux-schnell", "sdxl", "sora-2", "veo-3", "luma-dream", "kling-ai", "udio", "suno"];
 
-// Real, verified-live sample files — reused across generated items instead
-// of a single repeated URL, so scrolling deep into Discover doesn't expose
-// the same video/track over and over. Same domains already used by the
-// curated seed data (mixkit, soundhelix), just more of them.
-const VIDEO_POOL = [
-  "https://assets.mixkit.co/videos/preview/mixkit-flying-through-a-futuristic-tunnel-with-neon-lights-42292-large.mp4",
-  "https://assets.mixkit.co/videos/preview/mixkit-digital-circuit-board-background-42289-large.mp4",
-  "https://assets.mixkit.co/videos/preview/mixkit-rotating-planet-earth-in-outer-space-42358-large.mp4",
-  "https://assets.mixkit.co/videos/preview/mixkit-clockwork-clock-gears-moving-macro-32752-large.mp4",
-];
-const MUSIC_POOL = Array.from({ length: 10 }, (_, i) => `https://www.soundhelix.com/examples/mp3/SoundHelix-Song-${i + 1}.mp3`);
-
 // Each entry is a (kind, category) pair — "category" is what "more like
 // this" groups on. More categories = the feed doesn't visibly loop as fast,
 // and a detail view can pull a plausible "similar" set without any real
@@ -1737,9 +1746,21 @@ const CATEGORY_OF: Record<string, string[]> = {
 
 const pick = <T,>(arr: T[]) => arr[Math.floor(Math.random() * arr.length)];
 
+// Only kinds this can honestly produce. Generated filler enters the live
+// Discover feed unlabelled, so every item has to actually be what it claims:
+// an image is rendered from its own prompt, and a coding item's prompt is
+// itself the artifact. Video and audio had no generator — they were handed one
+// of four stock clips or ten stock tracks, chosen by id hash, bearing an
+// invented author and like count and no relationship whatsoever to the caption
+// above them. There is no free video or music generation to replace that with,
+// so this produces none: the Videos and Audios tabs show real creations or
+// they show nothing.
+const GENERATABLE_KINDS: MarketItem["kind"][] = ["image", "coding"];
+
 export function generateMoreMarketItems(count: number, currentLen: number, category?: string, kind?: MarketItem["kind"]): MarketItem[] {
   const items: MarketItem[] = [];
-  const kinds: MarketItem["kind"][] = ["image", "video", "audio", "coding"];
+  if (kind && !GENERATABLE_KINDS.includes(kind)) return items;
+  const kinds = GENERATABLE_KINDS;
   for (let i = 0; i < count; i++) {
     const k: MarketItem["kind"] = kind || (category
       ? (kinds.find((x) => CATEGORY_OF[x].includes(category)) || pick(kinds))
@@ -1750,9 +1771,11 @@ export function generateMoreMarketItems(count: number, currentLen: number, categ
     // Images are generated from the prompt itself (Pollinations, keyless), so
     // a tile actually depicts its caption. A fixed seed per id keeps a given
     // item stable across re-renders instead of reshuffling on every scroll.
-    let url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=512&height=512&nologo=true&model=flux&seed=${Math.abs(hashString(id)) % 1_000_000}`;
-    if (k === "video") url = VIDEO_POOL[Math.abs(hashString(id)) % VIDEO_POOL.length];
-    else if (k === "audio") url = MUSIC_POOL[Math.abs(hashString(id)) % MUSIC_POOL.length];
+    // Coding items carry no media — the prompt is the artifact, and the tile
+    // renders it as text.
+    const url = k === "image"
+      ? `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=512&height=512&nologo=true&model=flux&seed=${Math.abs(hashString(id)) % 1_000_000}`
+      : undefined;
 
     items.push({
       id,

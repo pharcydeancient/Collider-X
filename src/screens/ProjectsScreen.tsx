@@ -45,6 +45,21 @@ export function ProjectsScreen({ goBack }: { goBack: () => void }) {
 
   const { q, setQ, filtered } = useSearch(typed_projects, (p) => `${p.name} ${p.tasks.map((t) => t.title).join(" ")}`);
 
+  // Shared by the "+" button and the keyboard's return key. Return did nothing
+  // at all before this — the input had no onSubmitEditing, so the gesture a
+  // phone keyboard puts under your thumb silently dropped what you typed.
+  // An empty box no longer creates anything either: tapping "+" on nothing used
+  // to produce a project literally called "New Project".
+  const addProject = () => {
+    const name = value.trim();
+    if (!name) return;
+    const id = newId("p");
+    const modelId = state.selectedModelIds[state.activeCategory]?.[0] || "global";
+    dispatch({ type: "project", id, name, modelId, fingerprint: id });
+    setValue("");
+    setEditingProject({ id, name, tasks: [], modelId });
+  };
+
   const allTasks = useMemo(() => {
     const list: any[] = [];
     typed_projects.forEach((p) => {
@@ -145,16 +160,11 @@ export function ProjectsScreen({ goBack }: { goBack: () => void }) {
                   placeholder="Create new workspace project..."
                   placeholderTextColor="rgba(255,255,255,0.25)"
                   style={localStyles.addInput}
+                  returnKeyType="done"
+                  onSubmitEditing={addProject}
                 />
                 <Pressable
-                  onPress={() => {
-                    const id = newId("p");
-                    const modelId = state.selectedModelIds[state.activeCategory]?.[0] || "global";
-                    const name = value.trim() || "New Project";
-                    dispatch({ type: "project", id, name, modelId, fingerprint: id });
-                    setValue("");
-                    setEditingProject({ id, name, tasks: [], modelId });
-                  }}
+                  onPress={addProject}
                   style={localStyles.addButton}
                 >
                   <Ionicons name="add" size={18} color="#e2e8f0" />
@@ -167,7 +177,14 @@ export function ProjectsScreen({ goBack }: { goBack: () => void }) {
               {filtered.length === 0 ? (
                 <View style={localStyles.emptyContainer}>
                   <Ionicons name="grid-outline" size={32} color="rgba(255,255,255,0.15)" style={{ marginBottom: 10 }} />
-                  <Text style={styles.muted}>No projects found. Add one above.</Text>
+                  {/* An active search emptying the list is not the same state as
+                      having no projects, and telling someone with projects to
+                      "add one above" reads as though theirs were lost. */}
+                  <Text style={styles.muted}>
+                    {q.trim()
+                      ? `No projects match “${q.trim()}”.`
+                      : "No projects yet. Create one above."}
+                  </Text>
                 </View>
               ) : (
                 filtered.map((p) => {
